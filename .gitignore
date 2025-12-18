@@ -1,0 +1,12 @@
+# Python files
+__pycache__/
+*.py[cod]
+venv/
+backend/venv/
+backend/qrcodes/
+
+# Node modules (Frontend kachra)
+node_modules/
+frontend/node_modules/
+dist/
+.env
