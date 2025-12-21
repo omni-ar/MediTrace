@@ -4,7 +4,8 @@ __pycache__/
 venv/
 backend/venv/
 backend/qrcodes/
-
+backend/meditrace.db
+*.db
 # Node modules (Frontend kachra)
 node_modules/
 frontend/node_modules/
