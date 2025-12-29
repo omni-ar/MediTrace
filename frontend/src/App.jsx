@@ -145,14 +145,11 @@ function Dashboard({ stats }) {
     setBatchId("");
 
     try {
-      const response = await fetch(
-        "http://10.205.204.149:8000/generate-batch",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(formData),
-        }
-      );
+      const response = await fetch("http://10.22.214.149:8000/generate-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
 
       const data = await response.json();
 
@@ -667,7 +664,7 @@ export default function App() {
 
   // Fetch real stats on component mount
   useEffect(() => {
-    fetch("http://10.205.204.149:8000/stats")
+    fetch("http://10.22.214.149:8000/stats")
       .then((res) => res.json())
       .then((data) => setStats(data))
       .catch((err) => console.error("Failed to fetch stats:", err));
