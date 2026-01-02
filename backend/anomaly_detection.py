@@ -58,7 +58,7 @@ def calculate_travel_speed(loc1, loc2, time1, time2):
     
     # Avoid division by zero
     if time_diff_hours == 0:
-        return float('inf')
+        return 0
     
     speed_kmh = distance_km / time_diff_hours
     return speed_kmh

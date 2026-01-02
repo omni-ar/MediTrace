@@ -1,0 +1,25 @@
+# YOLOv8 Dataset Configuration - MediTrace Packaging Detection
+
+# Dataset root (absolute path - IMPORTANT!)
+path: C:/Users/arjit/Desktop/MediTrace/backend/dataset
+
+# Relative paths from 'path'
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+# Number of classes
+nc: 1
+names: ['medicine_packaging']
+
+roboflow:
+  workspace: meditrace-dmawb
+  project: meditrace-packaging
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/meditrace-dmawb/meditrace-packaging/dataset/1
+
+# Dataset statistics
+# Training: 147 images (will split to 118 train + 29 valid)
+# Total: 147 images (with augmentation from 49 originals)
+# Augmentations: Flip horizontal, Rotation ±15°, Brightness ±15%, Blur 1px
