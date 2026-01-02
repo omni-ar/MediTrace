@@ -6,6 +6,12 @@ backend/venv/
 backend/qrcodes/
 backend/meditrace.db
 *.db
+
+/backend/venv/
+/backend/__pycache__/
+/backend/qrcodes/
+/backend/dataset/raw/
+/backend/dataset/train/images/
 # Node modules (Frontend kachra)
 node_modules/
 frontend/node_modules/
