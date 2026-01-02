@@ -6,6 +6,12 @@
 
 **Core Value Proposition:** Enable consumers to verify medicine authenticity by scanning a QR code - no app download required. Combines computer vision (YOLOv8) with behavioral analysis (Random Forest) for comprehensive counterfeit detection.
 
+## 🚀 Project Status: 97% Complete
+
+**Latest Milestone (Jan 2, 2026):** YOLOv8 Training Complete with 99.5% mAP50! 🎉
+
+**Next:** Random Forest Classifier (Est. 2 hours)
+
 ---
 
 ## 🚀 Project Vision
@@ -64,69 +70,43 @@
 
 ```
 MediTrace/
-│
-├── frontend/                      # React application
+├── frontend/                 # React SPA
 │   ├── src/
-│   │   ├── App.jsx               # Main app with 4 tabs + 3D background
-│   │   ├── App.css               # Glass-morphism styling
-│   │   ├── VerifyPage.jsx        # 3 verification methods
-│   │   ├── LedgerPage.jsx        # Blockchain view
-│   │   ├── SystemMonitor.jsx     # Real-time monitoring dashboard
-│   │   └── main.jsx              # Entry point
-│   ├── public/
+│   │   ├── App.jsx          # 4 tabs + 3D background
+│   │   ├── VerifyPage.jsx   # 3 verification methods
+│   │   ├── LedgerPage.jsx   # Blockchain view
+│   │   └── SystemMonitor.jsx # Real-time dashboard
 │   └── package.json
 │
-├── backend/                       # FastAPI server
-│   ├── main.py                   # API endpoints (11 routes)
-│   ├── database.py               # SQLite operations + seed data
-│   ├── blockchain.py             # Blockchain implementation
-│   ├── anomaly_detection.py      # Haversine distance + speed detection
+├── backend/
+│   ├── main.py              # 11 API endpoints
+│   ├── database.py          # SQLite + seed (89 units)
+│   ├── blockchain.py        # Chain linking
+│   ├── anomaly_detection.py # Haversine formula
 │   │
-│   ├── ml_models/                # Machine Learning modules
-│   │   ├── __init__.py
-│   │   ├── yolo_detector.py      # YOLOv8 wrapper
-│   │   ├── random_forest_model.py # RF classifier
-│   │   ├── feature_extractor.py   # Feature engineering
-│   │   ├── train_yolo.py          # YOLOv8 training script
-│   │   ├── train_rf.py            # Random Forest training
-│   │   └── organize_dataset.py    # Dataset preparation utility
+│   ├── ml_models/
+│   │   ├── train_yolo.py           # YOLOv8 training
+│   │   ├── split_dataset.py        # Dataset splitter
+│   │   ├── yolo_detector.py        # Wrapper (TODO)
+│   │   ├── feature_extractor.py    # 10 features (TODO)
+│   │   ├── train_rf.py             # RF training (TODO)
+│   │   └── random_forest_model.py  # Classifier (TODO)
 │   │
-│   ├── trained_models/           # Saved ML models
-│   │   ├── yolov8_pharma.pt      # Trained YOLOv8 weights
-│   │   ├── rf_classifier.pkl      # Trained Random Forest
-│   │   └── scaler.pkl             # Feature scaler
+│   ├── trained_models/
+│   │   └── yolov8_packaging.pt  # 6.3 MB
 │   │
-│   ├── dataset/                  # Training data
-│   │   ├── raw/                  # Original Kaggle dataset (3900 images)
-│   │   ├── selected/             # Curated 50 images for labeling
-│   │   ├── train/
-│   │   │   ├── images/           # Training images (augmented)
-│   │   │   └── labels/           # YOLO format labels
-│   │   ├── valid/
-│   │   │   ├── images/
-│   │   │   └── labels/
-│   │   ├── test/
-│   │   │   ├── images/
-│   │   │   └── labels/
-│   │   └── data.yaml             # Dataset configuration
+│   ├── dataset/
+│   │   ├── raw/             # Kaggle 7,800 images
+│   │   ├── selected/        # Curated 50
+│   │   ├── train/           # 76 images + labels
+│   │   ├── valid/           # 71 images + labels
+│   │   └── data.yaml        # Config
 │   │
-│   ├── notebooks/                # Jupyter notebooks
-│   │   ├── 01_data_exploration.ipynb
-│   │   ├── 02_yolo_training.ipynb
-│   │   └── 03_rf_training.ipynb
-│   │
-│   ├── qrcodes/                  # Generated QR code images
-│   ├── meditrace.db              # SQLite database
-│   ├── requirements.txt          # Python dependencies
-│   └── venv/                     # Virtual environment
+│   ├── meditrace.db         # SQLite
+│   ├── qrcodes/             # Generated QRs
+│   └── requirements.txt
 │
-├── docs/                         # 📚 Documentation
-│   ├── ARCHITECTURE.md           # System design
-│   ├── ML_PIPELINE.md            # ML workflow details
-│   ├── API_REFERENCE.md          # API endpoints documentation
-│   └── VIVA_GUIDE.md             # Exam defense guide
-│
-└── README.md                     # This file
+└── README.md                # This file
 ```
 
 ---
@@ -305,121 +285,89 @@ if speed > 900:  # km/h (max airplane speed)
 
 ---
 
-## 🤖 Machine Learning Pipeline
+## 🤖 ML Pipeline Details
 
-### Phase 1: YOLOv8 - Packaging Verification (COMPLETED)
+### YOLOv8: Visual Verification ✅ DONE
 
-**Purpose:** Detect security features on medicine packaging
+**Training:**
 
-**Architecture:**
+- Epochs: 50
+- Batch: 16
+- Optimizer: AdamW (lr=0.001)
+- Time: 33 min 10 sec
+- Device: AMD Ryzen 7 5800H (CPU)
 
-- **Model:** YOLOv8-nano (3.2M parameters)
-- **Layers:** 53 convolutional layers
-- **Input:** 640×640 RGB image
-- **Output:** Bounding boxes + confidence scores
+**Dataset:**
 
-**Training Process:**
+- Kaggle source: 7,800 pharma images
+- Selected: 50 diverse samples
+- Labeled: 49 on Roboflow (1 class: medicine_packaging)
+- Augmentation: 3x (flip, rotate ±15°, brightness ±15%, blur 1px)
+- Final: 147 images (76 train, 71 valid)
 
-```bash
-# 1. Dataset Preparation
-50 medicine images labeled on Roboflow
-Classes: [hologram, seal, label]
+**Performance:**
+| Epoch | mAP50 | Precision | Recall |
+|-------|-------|-----------|--------|
+| 1 | 43.3% | 1.4% | 98.6% |
+| 10 | 77.7% | 75.2% | 84.7% |
+| 20 | 83.2% | 75.8% | 82.5% |
+| 30 | 98.9% | 97.2% | 98.6% |
+| **50** | **99.5%** | **99.7%** | **100%** |
 
-# 2. Data Augmentation
-- Rotation: ±15°
-- Brightness: ±15%
-- Horizontal flip: 50%
-Result: 105 training images from 35 originals
+**Files:**
 
-# 3. Training
-Epochs: 100
-Batch size: 16
-GPU: Google Colab (6 hours) or CPU (overnight)
-Optimizer: AdamW
-Learning rate: 0.001
-
-# 4. Validation
-mAP50: 0.89 (89% detection accuracy)
-Precision: 0.92
-Recall: 0.85
+```
+trained_models/yolov8_packaging.pt  (6.3 MB)
+ml_models/runs/train/meditrace_packaging/
+├── weights/best.pt
+├── results.png
+├── confusion_matrix.png
+├── PR_curve.png
+└── F1_curve.png
 ```
 
-**Detection Output:**
+**Inference:**
 
-```json
-{
-  "hologram": {
-    "detected": true,
-    "confidence": 0.94,
-    "bbox": [45, 67, 120, 80]
-  },
-  "seal": {
-    "detected": true,
-    "confidence": 0.88,
-    "bbox": [30, 150, 100, 60]
-  },
-  "label": {
-    "detected": true,
-    "confidence": 0.95,
-    "bbox": [10, 10, 300, 400]
-  }
-}
+```python
+from ultralytics import YOLO
+model = YOLO('trained_models/yolov8_packaging.pt')
+results = model('medicine.jpg')
+# Output: confidence=0.985, bbox=[45,67,580,635]
 ```
 
 ---
 
-### Phase 2: Random Forest - Behavioral Classification (IN PROGRESS)
+### Random Forest: Behavioral Analysis 🚧 IN PROGRESS
 
-**Purpose:** Predict if drug is counterfeit based on multiple signals
+**10 Features:**
+| # | Feature | Source | Type |
+|---|---------|--------|------|
+| 1 | packaging_present | YOLOv8 | Binary |
+| 2 | packaging_confidence | YOLOv8 | Float 0-1 |
+| 3 | max_speed_kmh | Haversine | Float 0-10K |
+| 4 | total_locations | Supply chain | Int 1-10 |
+| 5 | location_deviation | Expected vs actual | Int 0-5 |
+| 6 | total_time_hours | First→Last scan | Float 0-1K |
+| 7 | weekend_scan | Timestamp | Binary |
+| 8 | license_valid | Database | Binary |
+| 9 | price_valid | MRP > 0 | Binary |
+| 10 | recent_failures | 30-day history | Int 0-100 |
 
-**Features (10 total):**
+**Training Plan:**
 
-| #   | Feature            | Type    | Example Value | Source                       |
-| --- | ------------------ | ------- | ------------- | ---------------------------- |
-| 1   | hologram_present   | Binary  | 0 or 1        | YOLOv8                       |
-| 2   | seal_intact        | Binary  | 0 or 1        | YOLOv8                       |
-| 3   | label_quality      | Float   | 0.0-1.0       | YOLOv8 confidence            |
-| 4   | max_speed_kmh      | Float   | 6900.0        | Haversine calculation        |
-| 5   | total_locations    | Integer | 2             | Supply chain count           |
-| 6   | expected_locations | Integer | 4             | Normal route                 |
-| 7   | total_time_hours   | Float   | 0.16          | Time between first/last scan |
-| 8   | weekend_scan       | Binary  | 0 or 1        | Timestamp analysis           |
-| 9   | price_deviation    | Float   | 0.0-1.0       | (Actual - MRP) / MRP         |
-| 10  | license_valid      | Binary  | 0 or 1        | Database check               |
+- Synthetic data: 40 authentic + 35 fake samples
+- Algorithm: Random Forest (100 trees, max_depth=10)
+- Split: 70/20/10 train/val/test
+- Expected accuracy: 92-95%
 
-**Training:**
+**Prediction Output:**
 
-```python
-# Prepare features
-X = extract_features(drug_data)  # 10 features
-y = [0, 0, 1, 0, 1, 0, ...]      # Labels: 0=authentic, 1=fake
-
-# Train Random Forest
-model = RandomForestClassifier(
-    n_estimators=100,  # 100 decision trees
-    max_depth=10,
-    random_state=42
-)
-model.fit(X, y)
-
-# Feature importance
-speed_kmh: 0.35          ← Most important!
-license_valid: 0.22
-hologram_present: 0.18
-price_deviation: 0.15
-...
-```
-
-**Prediction:**
-
-```python
-prediction = model.predict_proba(new_drug_features)
-# Output: [0.06, 0.94]  (6% authentic, 94% fake)
-
-result = {
-    "is_counterfeit": True,
-    "confidence": 0.94,
-    "risk_level": "CRITICAL"
+```json
+{
+  "is_counterfeit": true,
+  "confidence": 0.94,
+  "risk_level": "CRITICAL",
+  "recommendation": "DO NOT CONSUME"
 }
 ```
 
@@ -1007,34 +955,60 @@ curl http://localhost:8000/blockchain/status
 - [ ] AWS deployment
 - [ ] CDSCO compliance
 
-## 🔄 Changelog
+## 📈 Performance Benchmarks
 
-### [v2.0.0] - 2024-12-30
+### YOLOv8 Model
 
-- ✨ Added ML/DL pipeline (YOLOv8 + Random Forest)
+| Metric     | Value | Industry | Grade      |
+| ---------- | ----- | -------- | ---------- |
+| Precision  | 99.7% | >90%     | ⭐⭐⭐⭐⭐ |
+| Recall     | 100%  | >85%     | ⭐⭐⭐⭐⭐ |
+| mAP50      | 99.5% | >80%     | ⭐⭐⭐⭐⭐ |
+| mAP50-95   | 70.0% | >50%     | ⭐⭐⭐⭐   |
+| Inference  | 112ms | <200ms   | ⭐⭐⭐⭐⭐ |
+| Model Size | 6.3MB | <10MB    | ⭐⭐⭐⭐⭐ |
+
+### System Performance
+
+| Metric           | Value  | Target | Status |
+| ---------------- | ------ | ------ | ------ |
+| API Response     | <100ms | <200ms | ✅     |
+| QR Generation    | 0.5s   | <1s    | ✅     |
+| Verification     | 3s     | <5s    | ✅     |
+| Concurrent Users | 50     | 100    | 🚧     |
+
+---
+
+## 🔄 Version History
+
+### v2.5.0 (Current) - Jan 2, 2026
+
+**ML/DL Milestone** ✨
+
+- ✅ YOLOv8 training complete (99.5% mAP50)
+- ✅ Model saved: `yolov8_packaging.pt`
+- ✅ Training artifacts generated
+- 🚧 Random Forest feature engineering started
+
+### v2.0.0 - Dec 30, 2025
+
+- ✨ ML/DL pipeline structure
 - ✨ Dataset preparation tools
-- ✨ Jupyter notebooks for experimentation
-- 🔧 System Monitor with real-time data
-- 🔧 Enhanced anomaly detection
-- 📚 Complete documentation overhaul
+- 🔧 System Monitor dashboard
 
-### [v1.5.0] - 2024-12-29
+### v1.5.0 - Dec 25, 2025
 
 - ✨ System Monitor page
 - ✨ Failed attempt tracking
-- 🐛 Fixed blockchain integration issues
-- 🐛 Fixed anomaly detection float infinity bug
+- 🐛 Blockchain integration fixes
 
-### [v1.0.0] - 2024-12-20
+### v1.0.0 - Dec 20, 2025
 
 - 🎉 Initial release
-- ✨ Core verification system
-- ✨ QR generation
-- ✨ Supply chain tracking
-- ✨ Basic blockchain implementation
+- Core verification system
 
 ---
 
 **Built with ❤️ by the Arjit Tripathi**
 
-**Last Updated:** December 30, 2024
+**Last Updated:** January 2, 2026
