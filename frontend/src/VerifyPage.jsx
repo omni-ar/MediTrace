@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
+import CameraScanner from "./CameraScanner";
 import {
   CheckCircle2,
   XCircle,
@@ -20,6 +21,7 @@ export default function VerifyPage() {
   const [isScanning, setIsScanning] = useState(false);
   const [uniqueId, setUniqueId] = useState("");
   const [uploadedImage, setUploadedImage] = useState(null);
+  const [showCamera, setShowCamera] = useState(false);
 
   // ═══════════════════════════════════════════
   // MANUAL ID VERIFICATION
@@ -36,7 +38,7 @@ export default function VerifyPage() {
     try {
       // Use your laptop's IP address
       const response = await fetch(
-        `http://10.205.204.149:8000/verify/${uniqueId}`
+        `http://10.22.214.149:8000/verify/${uniqueId}`
       );
       const data = await response.json();
 
@@ -75,7 +77,7 @@ export default function VerifyPage() {
       console.log("📤 Uploading image to AI endpoint...");
 
       // Call backend AI endpoint using your laptop's IP
-      const response = await fetch("http://10.205.204.149:8000/verify-image", {
+      const response = await fetch("http://10.22.214.149:8000/verify-image", {
         method: "POST",
         body: formData,
       });
@@ -110,19 +112,33 @@ export default function VerifyPage() {
   // ═══════════════════════════════════════════
   // CAMERA SCAN HANDLER (Future: WebRTC)
   // ═══════════════════════════════════════════
-  const handleCameraScan = () => {
-    alert(
-      "📸 Live Camera Scan Feature\n\n" +
-        "This will be implemented using:\n\n" +
-        "✓ HTML5 getUserMedia() - Camera access\n" +
-        "✓ jsQR Library - Real-time QR detection\n" +
-        "✓ WebRTC - Live video streaming\n" +
-        "✓ Canvas API - Frame capture\n\n" +
-        "🎯 Current Demo Options:\n" +
-        "• Manual Entry (✅ Working)\n" +
-        "• File Upload (✅ AI-Ready)\n\n" +
-        "Camera scan will be fully functional in production!"
-    );
+  const handleCameraScan = (scannedId) => {
+    console.log("📷 Camera scanned ID:", scannedId);
+    setShowCamera(false);
+    setUniqueId(scannedId);
+
+    // Auto-verify the scanned ID
+    setTimeout(() => {
+      handleVerifyWithId(scannedId);
+    }, 300);
+  };
+
+  const handleVerifyWithId = async (id) => {
+    setIsScanning(true);
+    setScanResult(null);
+
+    try {
+      const response = await fetch(`http://10.22.214.149:8000/verify/${id}`);
+      const data = await response.json();
+
+      console.log("✅ Backend response:", data);
+      setScanResult(data);
+    } catch (error) {
+      console.error("❌ Verification failed:", error);
+      alert("Failed to verify. Ensure backend is running on port 8000!");
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   return (
@@ -374,7 +390,7 @@ export default function VerifyPage() {
 
             <button
               className="primary-btn"
-              onClick={handleCameraScan}
+              onClick={() => setShowCamera(true)}
               style={{
                 fontSize: "0.875rem",
                 padding: "0.875rem",
@@ -395,7 +411,7 @@ export default function VerifyPage() {
                 color: "#64748b",
               }}
             >
-              📹 WebRTC + jsQR
+              📹 JSQR
             </div>
           </div>
         </motion.div>
@@ -734,6 +750,13 @@ export default function VerifyPage() {
             </button>
           </div>
         </motion.div>
+      )}
+      {/* 🆕 Camera Scanner Modal - ADD THIS! */}
+      {showCamera && (
+        <CameraScanner
+          onScanSuccess={handleCameraScan}
+          onClose={() => setShowCamera(false)}
+        />
       )}
     </div>
   );

@@ -12,6 +12,8 @@ import numpy as np
 from pyzbar.pyzbar import decode
 from typing import Optional
 import sqlite3
+import time
+startup_time = time.time()
 
 # Import database functions
 from database import (
@@ -35,6 +37,34 @@ from anomaly_detection import (
     analyze_drug_safety
 )
 
+# 🆕 ML/DL IMPORTS
+# 🆕 ML/DL IMPORTS
+try:
+    import sys
+    from pathlib import Path
+    
+    # Add ml_models directory to Python path
+    ml_models_path = Path(__file__).parent / 'ml_models'
+    sys.path.insert(0, str(ml_models_path))
+    
+    from yolo_detector import PackagingDetector
+    from counterfeit_classifier import CounterfeitClassifier
+    
+    # Initialize ML models
+    print("🤖 Loading ML models...")
+    yolo_detector = PackagingDetector()
+    rf_classifier = CounterfeitClassifier()
+    print("✅ ML models loaded successfully!")
+    
+    ML_ENABLED = True
+except Exception as e:
+    print(f"⚠️  ML models not available: {e}")
+    print("   System will work without ML predictions")
+    ML_ENABLED = False
+    yolo_detector = None
+    rf_classifier = None
+
+# Initialize FastAPI app
 app = FastAPI()
 
 # 🆕 NEW: Initialize Blockchain
@@ -282,6 +312,15 @@ async def generate_batch(request: DrugBatchRequest):
 
 @app.get("/verify/{unique_id}")
 def verify_drug(unique_id: str):
+    """
+    Verify drug authenticity with ML-powered counterfeit detection
+    
+    New features:
+    - Random Forest behavioral analysis
+    - YOLOv8 visual verification (if image provided)
+    - Combined risk assessment
+    """
+    
     # Get drug from database
     drug = get_drug_by_unique_id(unique_id)
     
@@ -301,13 +340,49 @@ def verify_drug(unique_id: str):
     # Get supply chain
     supply_chain = get_supply_chain(drug['id'])
     
-    # 🆕 NEW: Analyze for anomalies
+    # 🆕 ML PREDICTION - Random Forest Behavioral Analysis
+    ml_prediction = None
+    if ML_ENABLED and rf_classifier:
+        try:
+            # No image provided for text-only verification
+            ml_prediction = rf_classifier.predict(
+                drug_id=drug['id'],
+                supply_chain=supply_chain,
+                yolo_features=None  # Text-only, no image
+            )
+            
+            # If Random Forest detects counterfeit with high confidence
+            if ml_prediction['is_counterfeit'] and ml_prediction['confidence'] > 0.75:
+                log_failed_attempt(
+                    scanned_id=unique_id,
+                    attempt_type="ML_COUNTERFEIT_DETECTED",
+                    reason=f"Random Forest prediction: {ml_prediction['explanation']}"
+                )
+                
+                return {
+                    "status": "suspicious",
+                    "message": "⚠️ ML COUNTERFEIT DETECTION",
+                    "name": drug['drug_name'],
+                    "batchId": drug['batch_id'],
+                    "ml_analysis": {
+                        "verdict": ml_prediction['verdict'],
+                        "confidence": f"{ml_prediction['confidence']:.1%}",
+                        "risk_level": ml_prediction['risk_level'],
+                        "explanation": ml_prediction['explanation'],
+                        "probability_counterfeit": f"{ml_prediction['probability_counterfeit']:.1%}"
+                    },
+                    "recommendation": "SUSPICIOUS - Verify with image scan or report to authorities"
+                }
+        
+        except Exception as e:
+            print(f"⚠️  ML prediction failed: {e}")
+            ml_prediction = None
+    
+    # 🔍 ANOMALY DETECTION (Existing geospatial analysis)
     anomaly_report = None
     if len(supply_chain) >= 2:
-        # Run comprehensive safety analysis
         anomaly_report = analyze_drug_safety(unique_id)
         
-        # If critical anomaly detected
         if anomaly_report and anomaly_report.get('risk_level') == 'CRITICAL':
             log_failed_attempt(
                 scanned_id=unique_id,
@@ -324,7 +399,7 @@ def verify_drug(unique_id: str):
                 "recommendation": "DO NOT CONSUME - Report to authorities immediately"
             }
     
-    # Format for frontend
+    # Format supply chain for frontend
     locations = []
     for event in supply_chain:
         timestamp = event['timestamp']
@@ -340,7 +415,8 @@ def verify_drug(unique_id: str):
             'status': 'verified'
         })
     
-    return {
+    # ✅ AUTHENTIC RESPONSE (with ML insights)
+    response = {
         "status": "authentic",
         "name": drug['drug_name'],
         "genericName": drug['generic_name'],
@@ -353,8 +429,20 @@ def verify_drug(unique_id: str):
         "mfgDate": drug['mfg_date'],
         "expDate": drug['exp_date'],
         "locations": locations,
-        "anomalyReport": anomaly_report  # 🆕 NEW: Include anomaly report
+        "anomalyReport": anomaly_report
     }
+    
+    # Add ML prediction if available
+    if ml_prediction:
+        response["ml_analysis"] = {
+            "verdict": ml_prediction['verdict'],
+            "confidence": f"{ml_prediction['confidence']:.1%}",
+            "risk_level": ml_prediction['risk_level'],
+            "probability_authentic": f"{ml_prediction['probability_authentic']:.1%}",
+            "probability_counterfeit": f"{ml_prediction['probability_counterfeit']:.1%}"
+        }
+    
+    return response
 
 # ════════════════════════════════════════════
 # VERIFY BY IMAGE UPLOAD (With Failed Logging)
@@ -362,16 +450,42 @@ def verify_drug(unique_id: str):
 
 @app.post("/verify-image")
 async def verify_from_image(file: UploadFile = File(...)):
+    """
+    Verify drug from QR image with YOLO + Random Forest analysis
+    
+    New features:
+    - YOLOv8 packaging detection
+    - Random Forest prediction with visual features
+    - Combined visual + behavioral analysis
+    """
+    
     try:
         # Read uploaded image
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
+        # 🆕 YOLO DETECTION - Check for medicine packaging
+        yolo_result = None
+        if ML_ENABLED and yolo_detector:
+            try:
+                yolo_result = yolo_detector.detect(image_array=img)
+                print(f"📦 YOLO: Packaging {'detected' if yolo_result['packaging_present'] else 'NOT detected'} "
+                      f"(confidence: {yolo_result['packaging_confidence']:.2%})")
+            except Exception as e:
+                print(f"⚠️  YOLO detection failed: {e}")
+                yolo_result = None
+        
         # Decode QR code using pyzbar
         decoded_objects = decode(img)
         
         if not decoded_objects:
+            # No QR detected - but check if packaging visible
+            if yolo_result and yolo_result['packaging_present']:
+                return {
+                    "status": "error",
+                    "message": "Medicine packaging detected but QR code not readable. Try better lighting/angle."
+                }
             return {"status": "error", "message": "No QR code detected in image"}
             
         # Extract unique_id from QR data
@@ -384,7 +498,7 @@ async def verify_from_image(file: UploadFile = File(...)):
         else:
             unique_id = qr_content
         
-        # Verify drug
+        # Verify drug exists in database
         drug = get_drug_by_unique_id(unique_id)
         
         if not drug:
@@ -396,10 +510,64 @@ async def verify_from_image(file: UploadFile = File(...)):
             )
             
             return {"status": "fake", "message": f"Invalid QR Code: {unique_id}"}
-            
+        
         # Get supply chain
         supply_chain = get_supply_chain(drug['id'])
         
+        # 🆕 ML PREDICTION - Random Forest with YOLO features
+        ml_prediction = None
+        if ML_ENABLED and rf_classifier:
+            try:
+                # Prepare YOLO features for Random Forest
+                yolo_features = None
+                if yolo_result:
+                    yolo_features = {
+                        'packaging_present': 1 if yolo_result['packaging_present'] else 0,
+                        'packaging_confidence': yolo_result['packaging_confidence']
+                    }
+                
+                # Run Random Forest prediction
+                ml_prediction = rf_classifier.predict(
+                    drug_id=drug['id'],
+                    supply_chain=supply_chain,
+                    yolo_features=yolo_features
+                )
+                
+                print(f"🌳 Random Forest: {ml_prediction['verdict']} "
+                      f"(confidence: {ml_prediction['confidence']:.2%})")
+                
+                # If counterfeit detected with high confidence
+                if ml_prediction['is_counterfeit'] and ml_prediction['confidence'] > 0.75:
+                    log_failed_attempt(
+                        scanned_id=unique_id,
+                        attempt_type="ML_COUNTERFEIT_DETECTED",
+                        reason=f"Visual + Behavioral analysis: {ml_prediction['explanation']}"
+                    )
+                    
+                    return {
+                        "status": "suspicious",
+                        "message": "⚠️ COUNTERFEIT DETECTED (ML Analysis)",
+                        "unique_id": unique_id,
+                        "name": drug['drug_name'],
+                        "batchId": drug['batch_id'],
+                        "ml_analysis": {
+                            "verdict": ml_prediction['verdict'],
+                            "confidence": f"{ml_prediction['confidence']:.1%}",
+                            "risk_level": ml_prediction['risk_level'],
+                            "explanation": ml_prediction['explanation'],
+                            "visual_check": {
+                                "packaging_detected": yolo_result['packaging_present'] if yolo_result else None,
+                                "confidence": f"{yolo_result['packaging_confidence']:.1%}" if yolo_result else None
+                            }
+                        },
+                        "recommendation": "DO NOT CONSUME - Multiple red flags detected"
+                    }
+            
+            except Exception as e:
+                print(f"⚠️  ML prediction failed: {e}")
+                ml_prediction = None
+        
+        # Format supply chain locations
         locations = []
         for event in supply_chain:
             timestamp = event['timestamp']
@@ -415,7 +583,8 @@ async def verify_from_image(file: UploadFile = File(...)):
                 'status': 'verified'
             })
 
-        return {
+        # ✅ AUTHENTIC RESPONSE (with ML insights)
+        response = {
             "status": "authentic",
             "unique_id": unique_id,
             "name": drug['drug_name'],
@@ -428,9 +597,31 @@ async def verify_from_image(file: UploadFile = File(...)):
             "expDate": drug['exp_date'],
             "locations": locations
         }
+        
+        # Add YOLO results
+        if yolo_result:
+            response["visual_verification"] = {
+                "packaging_detected": yolo_result['packaging_present'],
+                "confidence": f"{yolo_result['packaging_confidence']:.2%}",
+                "num_packages": yolo_result['num_packages']
+            }
+        
+        # Add ML prediction
+        if ml_prediction:
+            response["ml_analysis"] = {
+                "verdict": ml_prediction['verdict'],
+                "confidence": f"{ml_prediction['confidence']:.1%}",
+                "risk_level": ml_prediction['risk_level'],
+                "probability_authentic": f"{ml_prediction['probability_authentic']:.1%}",
+                "probability_counterfeit": f"{ml_prediction['probability_counterfeit']:.1%}"
+            }
+        
+        return response
 
     except Exception as e:
         print(f"❌ Error processing image: {e}")
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": "Could not process image"}
 
 # ════════════════════════════════════════════
@@ -721,7 +912,35 @@ def get_monitor_dashboard():
         "timestamp": datetime.now().isoformat()
     }
 
-
-# Add this at module level (top of file after imports)
-import time
-startup_time = time.time()
+@app.get("/ml/status")
+def get_ml_status():
+    """Get status of ML models (YOLOv8 + Random Forest)"""
+    
+    yolo_status = "loaded" if (ML_ENABLED and yolo_detector) else "not available"
+    rf_status = "loaded" if (ML_ENABLED and rf_classifier) else "not available"
+    
+    response = {
+        "ml_enabled": ML_ENABLED,
+        "models": {
+            "yolov8": {
+                "status": yolo_status,
+                "purpose": "Visual packaging verification"
+            },
+            "random_forest": {
+                "status": rf_status,
+                "purpose": "Behavioral counterfeit detection"
+            }
+        }
+    }
+    
+    if ML_ENABLED and rf_classifier:
+        try:
+            importances = rf_classifier.get_feature_importance()
+            top_3 = sorted(importances.items(), key=lambda x: x[1], reverse=True)[:3]
+            response["models"]["random_forest"]["top_features"] = {
+                name: f"{importance:.3f}" for name, importance in top_3
+            }
+        except:
+            pass
+    
+    return response
