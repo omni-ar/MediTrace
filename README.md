@@ -2,9 +2,9 @@
 
 ## 🎯 Overview
 
-**MediTrace** is an AI-powered blockchain-inspired pharmaceutical verification system that combats counterfeit medicines through cryptographic serialization, supply chain tracking, and machine learning-based anomaly detection.
+**MediTrace** is an AI-powered blockchain-inspired pharmaceutical verification system that **detects and traces** counterfeit medicines through cryptographic serialization, supply chain tracking, and machine learning-based anomaly detection.
 
-**Core Value Proposition:** Enable consumers to verify medicine authenticity by scanning a QR code - no app download required. Combines computer vision (YOLOv8) with behavioral analysis (Random Forest) for comprehensive counterfeit detection.
+**Core Value Proposition:** Enable consumers to **verify** medicine authenticity and **detect suspicious patterns** by scanning a QR code - transforming counterfeit detection from reactive investigation to proactive surveillance.
 
 ## 🚀 Project Status: 100% COMPLETE! 🎉
 
@@ -286,7 +286,79 @@ if speed > 900:  # km/h (max airplane speed)
     flag_as_cloning_attack()
 ```
 
+### ⚠️ Current Limitations
+
+**Blockchain Implementation:**
+
+- **Current:** Cryptographic chaining in centralized SQLite database
+- **Limitation:** Admin with database access can theoretically tamper
+- **Immutability:** Achieved through hash validation, not decentralization
+- **Production Requirement:** Migrate to Hyperledger Fabric or similar for true immutability
+
+**Trade-offs:**
+
+- ✅ Faster development and prototyping
+- ✅ Lower infrastructure cost
+- ✅ Demonstrates cryptographic concepts## 🛡️ Security Analysis
+
+### Known Attack Vectors
+
+#### 1. Photocopy/Clone Attack
+
+**Attack:** Photocopy real QR code, attach to counterfeit products
+
+**Current Mitigation:**
+
+- ✅ Anomaly detection flags multiple scans from different locations
+- ✅ Impossible speed detection (1000+ km/h between scans)
+- ✅ Scan frequency analysis
+- ⚠️ **Limitation:** First scan of cloned QR will pass
+
+**Future Mitigation:**
+
+- 🔄 Dynamic QR with OTP (changes every 30 seconds)
+- 📱 NFC tags (unclonable)
+- 🌐 Real-time scan coordination (reject simultaneous scans)
+
+#### 2. Database Tampering
+
+**Attack:** Admin access to modify SQLite records
+
+**Current Mitigation:**
+
+- ✅ Cryptographic hash validation
+- ✅ Chain linking (tampering breaks chain)
+- ⚠️ **Limitation:** Centralized database vulnerable
+
+**Future Mitigation:**
+
+- 🔗 Hyperledger Fabric (distributed ledger)
+- 🔐 Multi-signature authorization
+- 📊 Audit logging
+
+### Honest Assessment
+
+**What We Prevent:**
+
+- ✅ Completely fake QR codes (not in database)
+- ✅ Cloned QRs after first detection (anomaly flagging)
+- ✅ Supply chain manipulation (hash mismatches)
+
+**What We Detect (Not Prevent):**
+
+- 🔍 First use of cloned QR (detection, not prevention)
+- 🔍 Suspicious patterns (multiple rapid scans)
+
+**Messaging Update:**
+
+- ❌ Don't say: "Eliminates counterfeit drugs"
+- ✅ Say: "Detects and traces counterfeit drugs, enabling rapid response"
+- ⚠️ Not truly tamper-proof without decentralization
+
+```
+
 ---
+
 
 ## 🤖 ML Pipeline Details
 
@@ -322,14 +394,16 @@ if speed > 900:  # km/h (max airplane speed)
 **Files:**
 
 ```
-trained_models/yolov8_packaging.pt  (6.3 MB)
+
+trained_models/yolov8_packaging.pt (6.3 MB)
 ml_models/runs/train/meditrace_packaging/
 ├── weights/best.pt
 ├── results.png
 ├── confusion_matrix.png
 ├── PR_curve.png
 └── F1_curve.png
-```
+
+````
 
 **Inference:**
 
@@ -338,7 +412,7 @@ from ultralytics import YOLO
 model = YOLO('trained_models/yolov8_packaging.pt')
 results = model('medicine.jpg')
 # Output: confidence=0.985, bbox=[45,67,580,635]
-```
+````
 
 ---
 
@@ -386,6 +460,36 @@ results = model('medicine.jpg')
 }
 ````
 
+### ⚠️ Important Note on Metrics
+
+**Dataset Limitations:**
+
+- Training Dataset: 75 synthetic samples (controlled scenarios)
+- YOLOv8 Dataset: 147 images (augmented from 49 hand-labeled)
+- High accuracy metrics reflect performance on limited, controlled data
+
+**Real-World Expectations:**
+
+- Current: 100% RF accuracy, 99.5% YOLOv8 mAP (proof-of-concept)
+- Production: Expected 92-96% with diverse real-world conditions
+- Challenges: Lighting variations, blur, damaged packaging, photocopies
+
+**Why Such High Metrics?**
+
+1. Small, curated dataset (quality over quantity)
+2. Transfer learning from pre-trained YOLOv8 weights
+3. Controlled synthetic data for Random Forest
+4. Proof-of-concept phase, not production deployment
+
+**Next Steps for Production:**
+
+- Expand to 500+ real-world images
+- Include edge cases and challenging scenarios
+- Continuous learning from field deployment
+- A/B testing with lower confidence thresholds
+
+````
+
 ---
 
 ## 📡 API Endpoints
@@ -411,7 +515,7 @@ results = model('medicine.jpg')
   "mfgDate": "2024-12-01",
   "expDate": "2026-12-01"
 }
-```
+````
 
 **Response:**
 
@@ -944,15 +1048,7 @@ curl http://localhost:8000/blockchain/status
 
 ### 📅 Planned Features (Future)
 
-#### Phase 3: ML Integration (Week 1)
-
-- [ ] Complete YOLOv8 training (3-4 days)
-- [ ] Integrate YOLOv8 in `/verify-image` endpoint
-- [ ] Complete Random Forest training (2-3 days)
-- [ ] Create `/predict` endpoint
-- [ ] Frontend UI for ML results
-
-#### Phase 4: Production Hardening (Week 2)
+#### Phase 4: Production Hardening (Week 1-3)
 
 - [ ] Migration: SQLite → PostgreSQL
 - [ ] Add database indexes
@@ -961,27 +1057,45 @@ curl http://localhost:8000/blockchain/status
 - [ ] Error handling improvements
 - [ ] Logging system
 
-#### Phase 5: Advanced Features (Future)
+### Phase 5: Advanced Features (Future)
 
-- [ ] Dynamic QR with OTP (photocopy protection)
-- [ ] NFC tag integration
-- [ ] Mobile app (React Native)
-- [ ] Hyperledger Fabric blockchain
-- [ ] AWS deployment
-- [ ] CDSCO compliance
+**Target Audience Clarification:**
+
+**Consumers (End Users):**
+
+- ✅ Zero-App Web Verification (Main USP - stays browser-based)
+- No app download required
+- Works on any smartphone
+
+**Supply Chain Partners (Distributors/Regulators):**
+
+- 📱 Mobile App (React Native) - for bulk scanning, offline mode
+- Batch verification capabilities
+- Warehouse integration
+- Inventory management
+
+**The "Zero-App" USP remains for end consumers. The mobile app targets business users.**
 
 ## 📈 Performance Benchmarks
 
+**Update Performance Benchmarks:**
+
+```markdown
 ### YOLOv8 Model
 
-| Metric     | Value | Industry | Grade      |
-| ---------- | ----- | -------- | ---------- |
-| Precision  | 99.7% | >90%     | ⭐⭐⭐⭐⭐ |
-| Recall     | 100%  | >85%     | ⭐⭐⭐⭐⭐ |
-| mAP50      | 99.5% | >80%     | ⭐⭐⭐⭐⭐ |
-| mAP50-95   | 70.0% | >50%     | ⭐⭐⭐⭐   |
-| Inference  | 112ms | <200ms   | ⭐⭐⭐⭐⭐ |
-| Model Size | 6.3MB | <10MB    | ⭐⭐⭐⭐⭐ |
+| Metric           | Value   | Industry  | Grade      | Notes                |
+| ---------------- | ------- | --------- | ---------- | -------------------- |
+| Precision        | 99.7%   | >90%      | ⭐⭐⭐⭐⭐ | On validation set    |
+| Recall           | 100%    | >85%      | ⭐⭐⭐⭐⭐ | Zero misses          |
+| mAP50            | 99.5%   | >80%      | ⭐⭐⭐⭐⭐ | Industry-leading     |
+| mAP50-95         | 70.0%   | >50%      | ⭐⭐⭐⭐   | Good localization    |
+| Inference        | 112ms   | <200ms    | ⭐⭐⭐⭐⭐ | CPU-based            |
+| Model Size       | 6.3MB   | <10MB     | ⭐⭐⭐⭐⭐ | Edge-deployable      |
+| **Dataset Size** | **147** | **1000+** | **⭐⭐**   | **Proof-of-concept** |
+| **Real Images**  | **49**  | **500+**  | **⭐⭐**   | **+ Augmentation**   |
+```
+
+---
 
 ### System Performance
 
