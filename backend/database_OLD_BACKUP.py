@@ -232,181 +232,6 @@ def get_supply_chain(drug_id):
         for r in results
     ]
 
-
-# ════════════════════════════════════════════════════════════════
-# 🆕 NEW METHODS FOR FEATUREEXTRACTORV2 INTEGRATION
-# Added: Jan 11, 2026 for ML Pipeline v3.0
-# ════════════════════════════════════════════════════════════════
-
-def get_drugs_by_batch(batch_id: str) -> list:
-    """
-    Get all drug unique_ids from a specific batch.
-    
-    Args:
-        batch_id: Batch identifier (e.g., "C28C623D")
-    
-    Returns:
-        list: List of unique_id strings (e.g., ["C28C623D-1", "C28C623D-2", ...])
-    
-    Example:
-        >>> get_drugs_by_batch("SEED1234")
-        ['SEED1234-1', 'SEED1234-2', 'SEED1234-3', ...]
-    """
-    try:
-        conn = sqlite3.connect('meditrace.db')
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            'SELECT unique_id FROM drugs WHERE batch_id = ?',
-            (batch_id,)
-        )
-        
-        results = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        
-        return results
-        
-    except Exception as e:
-        print(f"❌ Error getting drugs by batch: {e}")
-        return []
-
-
-def has_failed_attempts(unique_id: str) -> bool:
-    """
-    Check if a drug has any failed verification attempts.
-    Used by FeatureExtractorV2 for batch_health_score calculation.
-    
-    Args:
-        unique_id: Drug unique ID (e.g., "C28C623D-1")
-    
-    Returns:
-        bool: True if drug has failed attempts, False otherwise
-    
-    Example:
-        >>> has_failed_attempts("SEED1234-5")
-        False
-    """
-    try:
-        conn = sqlite3.connect('meditrace.db')
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            'SELECT COUNT(*) FROM failed_attempts WHERE scanned_id = ?',
-            (unique_id,)
-        )
-        
-        count = cursor.fetchone()[0]
-        conn.close()
-        
-        return count > 0
-        
-    except Exception as e:
-        print(f"❌ Error checking failed attempts: {e}")
-        return False
-
-
-def get_supply_chain_events(unique_id: str) -> list:
-    """
-    Get all supply chain events for a drug (for FeatureExtractorV2).
-    
-    Args:
-        unique_id: Drug unique ID
-    
-    Returns:
-        list: List of event dicts with keys:
-              - location (str)
-              - latitude (float)
-              - longitude (float)
-              - timestamp (str)
-              - event_type (str)
-    
-    Example:
-        >>> events = get_supply_chain_events("SEED1234-1")
-        >>> len(events)
-        3
-        >>> events[0]['event_type']
-        'Production Complete'
-    """
-    try:
-        conn = sqlite3.connect('meditrace.db')
-        cursor = conn.cursor()
-        
-        # First get drug_id from unique_id
-        cursor.execute('SELECT id FROM drugs WHERE unique_id = ?', (unique_id,))
-        result = cursor.fetchone()
-        
-        if not result:
-            conn.close()
-            return []
-        
-        drug_id = result[0]
-        
-        # Get supply chain events
-        cursor.execute('''
-            SELECT location, latitude, longitude, timestamp, event_type
-            FROM supply_chain 
-            WHERE drug_id = ?
-            ORDER BY timestamp ASC
-        ''', (drug_id,))
-        
-        events = []
-        for row in cursor.fetchall():
-            events.append({
-                'location': row[0],
-                'latitude': row[1],
-                'longitude': row[2],
-                'timestamp': row[3],
-                'event_type': row[4]
-            })
-        
-        conn.close()
-        return events
-        
-    except Exception as e:
-        print(f"❌ Error getting supply chain events: {e}")
-        return []
-
-
-def get_drug_data_for_ml(unique_id: str) -> dict:
-    """
-    Get drug data formatted for ML feature extraction.
-    Convenience wrapper for FeatureExtractorV2.
-    
-    Args:
-        unique_id: Drug unique ID
-    
-    Returns:
-        dict: Drug data with keys needed by FeatureExtractorV2:
-              - drug_name, batch_id, license_number, mrp, mfg_date
-              Returns None if drug not found
-    
-    Example:
-        >>> drug_data = get_drug_data_for_ml("SEED1234-1")
-        >>> drug_data['drug_name']
-        'Dolo 650'
-        >>> drug_data['mrp']
-        30.5
-    """
-    drug = get_drug_by_unique_id(unique_id)
-    
-    if not drug:
-        return None
-    
-    # Return only fields needed by FeatureExtractorV2
-    return {
-        'drug_name': drug['drug_name'],
-        'batch_id': drug['batch_id'],
-        'license_number': drug['license_number'],
-        'mrp': drug['mrp'],
-        'mfg_date': drug['mfg_date']
-    }
-
-
-# ════════════════════════════════════════════════════════════════
-# END OF NEW METHODS
-# ════════════════════════════════════════════════════════════════
-
-
 # ════════════════════════════════════════════
 # SEED DATA - Professional Sample Batches
 # ════════════════════════════════════════════
@@ -472,26 +297,26 @@ def seed_sample_data():
             # Add supply chain events
             add_supply_chain_event(
                 drug_id=drug_id,
-                location="Bangalore, Karnataka Factory",
+                location="Bangalore Factory",
                 lat=12.9716,
                 lon=77.5946,
-                event_type="Factory Production"  # MATCHED
+                event_type="Production Complete"
             )
             
             add_supply_chain_event(
                 drug_id=drug_id,
-                location="Chennai, Tamil Nadu Warehouse",
+                location="Chennai Warehouse",
                 lat=13.0827,
                 lon=80.2707,
-                event_type="Warehouse Receipt"   # MATCHED
+                event_type="Quality Check"
             )
             
             add_supply_chain_event(
                 drug_id=drug_id,
-                location="Mumbai, Maharashtra Retail Distribution",
+                location="Mumbai Retail",
                 lat=19.0760,
                 lon=72.8777,
-                event_type="Retail Distribution" # MATCHED
+                event_type="Warehouse Receipt"
             )
             
             total_created += 1
@@ -499,78 +324,7 @@ def seed_sample_data():
     print(f"✅ Seeded {total_created} units across {len(sample_drugs)} batches")
     return total_created
 
-
-# ════════════════════════════════════════════════════════════════
-# TESTING CODE FOR NEW METHODS
-# ════════════════════════════════════════════════════════════════
-
-def test_new_methods():
-    """Test the 4 new methods added for FeatureExtractorV2"""
-    print("\n" + "="*60)
-    print("🧪 TESTING NEW DATABASE METHODS")
-    print("="*60)
-    
-    # Get a sample batch_id
-    conn = sqlite3.connect('meditrace.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT DISTINCT batch_id FROM drugs LIMIT 1')
-    result = cursor.fetchone()
-    conn.close()
-    
-    if not result:
-        print("❌ No data in database. Run seed_sample_data() first!")
-        return
-    
-    test_batch = result[0]
-    
-    # Test 1: get_drugs_by_batch
-    print(f"\n📦 Test 1: get_drugs_by_batch('{test_batch}')")
-    drugs = get_drugs_by_batch(test_batch)
-    print(f"   Found {len(drugs)} drugs in batch")
-    for drug_id in drugs[:3]:  # Show first 3
-        print(f"   - {drug_id}")
-    
-    if drugs:
-        test_drug = drugs[0]
-        
-        # Test 2: has_failed_attempts
-        print(f"\n🚨 Test 2: has_failed_attempts('{test_drug}')")
-        has_failures = has_failed_attempts(test_drug)
-        print(f"   Has failed attempts: {has_failures}")
-        
-        # Test 3: get_supply_chain_events
-        print(f"\n🚚 Test 3: get_supply_chain_events('{test_drug}')")
-        events = get_supply_chain_events(test_drug)
-        print(f"   Found {len(events)} supply chain events:")
-        for i, event in enumerate(events, 1):
-            print(f"   {i}. {event['event_type']} at {event['location']}")
-            print(f"      GPS: ({event['latitude']}, {event['longitude']})")
-            print(f"      Time: {event['timestamp']}")
-        
-        # Test 4: get_drug_data_for_ml
-        print(f"\n💊 Test 4: get_drug_data_for_ml('{test_drug}')")
-        drug_data = get_drug_data_for_ml(test_drug)
-        if drug_data:
-            print(f"   Drug Name: {drug_data['drug_name']}")
-            print(f"   Batch ID: {drug_data['batch_id']}")
-            print(f"   License: {drug_data['license_number']}")
-            print(f"   MRP: ₹{drug_data['mrp']}")
-            print(f"   Mfg Date: {drug_data['mfg_date']}")
-        else:
-            print("   ❌ Drug not found!")
-    
-    print("\n" + "="*60)
-    print("✅ All new methods tested successfully!")
-    print("="*60)
-
-
 if __name__ == '__main__':
     init_db()
     update_supply_chain_table()
     seed_sample_data()
-    
-    # Test the new methods
-    print("\n" + "="*60)
-    print("🆕 TESTING FEATUREEXTRACTORV2 INTEGRATION")
-    print("="*60)
-    test_new_methods()
