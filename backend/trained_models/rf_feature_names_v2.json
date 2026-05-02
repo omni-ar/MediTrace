@@ -1,0 +1,10 @@
+[
+  "delivery_delay_delta",
+  "transit_speed_kmh",
+  "discount_rate_normalized",
+  "profit_ratio",
+  "shipping_mode_encoded",
+  "order_item_quantity_norm",
+  "price_deviation_score",
+  "benefit_ratio"
+]
