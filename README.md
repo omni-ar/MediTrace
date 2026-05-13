@@ -49,9 +49,9 @@
 ### Backend
 
 - **Framework**: FastAPI (Python 3.10+)
-- **Database**: SQLite (development) → PostgreSQL (production)
-- **QR Generation**: qrcode + Pillow
-- **Computer Vision**: OpenCV + pyzbar
+- **Database**: SQLAlchemy ORM (SQLite for development, PostgreSQL-ready)
+- **Task Orchestration**: Celery
+- **Message Broker**: Redis
 - **Cryptography**: hashlib (SHA-256)
 
 ### Machine Learning / Deep Learning
@@ -82,18 +82,18 @@ MediTrace/
 │   └── package.json
 │
 ├── backend/
-│   ├── main.py              # 11 API endpoints
-│   ├── database.py          # SQLite + seed (89 units)
-│   ├── blockchain.py        # Chain linking
-│   ├── anomaly_detection.py # Haversine formula
+│   ├── main.py              # API Gateway and async dispatch
+│   ├── celery_app.py        # Celery configuration and Redis broker integration
+│   ├── worker.py            # Async worker for ML inference execution
+│   ├── database.py          # SQLAlchemy engine and session factory
+│   ├── crud.py              # ORM database operations
+│   ├── models.py            # SQLAlchemy database models
+│   ├── schemas.py           # Pydantic validation schemas
+│   ├── test_pipeline.py     # Automated end-to-end testing script
 │   │
 │   ├── ml_models/
-│   │   ├── train_yolo.py           # YOLOv8 training
-│   │   ├── split_dataset.py        # Dataset splitter
-│   │   ├── yolo_detector.py        # Wrapper (TODO)
-│   │   ├── feature_extractor.py    # 10 features (TODO)
-│   │   ├── train_rf.py             # RF training (TODO)
-│   │   └── random_forest_model.py  # Classifier (TODO)
+│   │   ├── train_yolo.py             # YOLOv8 training script
+│   │   ├── counterfeit_classifier.py # V2 Classifier with db_session integration
 │   │
 │   ├── trained_models/
 │   │   └── yolov8_packaging.pt  # 6.3 MB
@@ -221,11 +221,10 @@ MediTrace/
    ↓
    Frontend auto-verifies
    ↓
-   Backend checks:
-   - Database (drug exists?)
-   - Supply chain (route valid?)
-   - YOLOv8 (packaging authentic?)
-   - Random Forest (behavioral anomalies?)
+   Backend handles:
+   - Fast verification (Database & Supply chain checks)
+   - Heavy ML operations dispatched asynchronously to Celery/Redis
+   - Client polls for final result
    ↓
    Result displayed:
    ✅ AUTHENTIC (green banner)
@@ -237,7 +236,15 @@ MediTrace/
 
 ## 🔐 Security Features
 
-### 1. Cryptographic Hashing (SHA-256)
+### 1. API Security: Stateless JWT & Live RBAC
+
+- **Authentication:** Passwords are hashed using `passlib` with `bcrypt`. 
+- **Stateless Tokens:** JSON Web Tokens (JWT) are strictly scoped to `sub` (User ID) and `exp` claims. The `role` claim is deliberately omitted to prevent the Stale Claims Vulnerability.
+- **Live Database Check:** The `get_current_user` FastAPI dependency intercepts the JWT and performs a microsecond primary-key lookup to verify the user's `is_active` status. This allows instantaneous revocation of compromised accounts without waiting for the token to expire.
+- **Role-Based Access Control (RBAC):** Endpoints are protected by a `RequireRole` closure (e.g., `/generate-batch` restricted to `manufacturer` and `admin`).
+- **Rate Limiting:** Public endpoints like `/verify-image` are throttled using a Redis-backed sliding window (e.g., 5 requests per 60 seconds per IP).
+
+### 2. Cryptographic Hashing (SHA-256)
 
 ```python
 hash_value = hashlib.sha256(
@@ -250,25 +257,27 @@ hash_value = hashlib.sha256(
 
 **Purpose:** Tamper-proof fingerprint of each drug unit
 
-### 2. Blockchain-Inspired Chain Linking
+### 3. Isolated Unit-Level Hash Chains (Immutable Ledger)
+
+To avoid the massive database lock contention ($O(N)$ bottleneck) of a single global blockchain, MediTrace implements **Isolated Unit-Level Hash Chains**. Every individual drug unit maintains its own separate cryptographic ledger.
 
 ```
-Block 0 (Genesis)
-├─ hash: bea1e0522e9a2b86...
-└─ previous_hash: 0x000000
+Genesis Block (First Scan)
+├─ block_hash: 9d3077a9e9bfea8ac17e...
+└─ previous_hash: 0000000000000000000000000000000000000000000000000000000000000000 ← 64-Zero Genesis Root
 
-Block 1 (Drug Production)
-├─ hash: e326814f6aebd005...
-└─ previous_hash: bea1e0522e9a2b86... ← Links to Block 0!
+Hop 1 (Warehouse Receipt)
+├─ block_hash: cd0a33257542657a1cb2...
+└─ previous_hash: 9d3077a9e9bfea8ac17e... ← Links to Genesis!
 
-Block 2 (Quality Check)
-├─ hash: 22e5100a6c53290f...
-└─ previous_hash: e326814f6aebd005... ← Links to Block 1!
+Hop 2 (Retail Distribution)
+├─ block_hash: 58b73623c3c74fedc1aa...
+└─ previous_hash: cd0a33257542657a1cb2... ← Links to Hop 1!
 ```
 
-**If Block 1 tampered:** Block 2's previous_hash won't match → Chain breaks!
+**Cryptographic Integrity:** Each hash uses deterministic JSON serialization (`sort_keys=True`). If a bad actor alters a location row in the SQLite database, the entire chain instantly breaks during the $O(K)$ verification traversal.
 
-### 3. Geospatial Anomaly Detection (Haversine Formula)
+### 4. Geospatial Anomaly Detection (Haversine Formula)
 
 ```python
 #Calculate great-circle distance
@@ -1109,6 +1118,16 @@ curl http://localhost:8000/blockchain/status
 ---
 
 ## 🔄 Version History
+
+### v3.1.0 - Jan 15, 2026 (Current)
+
+**Architectural Hardening & Logic Overhaul** 🛡️
+
+- ✅ **Behavioral ML Core:** Switched from Visual-dependence to 10-point behavioral feature extraction.
+- ✅ **Multi-Tier Classification:** Replaced Binary (Fake/Real) with Probabilistic Scoring (Authentic/Review/Suspicious).
+- ✅ **Security Patch:** Implemented Salted SHA-256 Hashing to prevent rainbow table attacks.
+- ✅ **Database Integrity:** Enforced Foreign Key constraints and cascading deletes.
+- **Critical Fix:** Resolved false positives for manual ID entry (The "53% Confidence" bug).
 
 ### v3.0.0 - Jan 3, 2026
 

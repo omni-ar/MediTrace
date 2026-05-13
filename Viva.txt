@@ -20,13 +20,13 @@
 
 **Answer:**
 
-> "It's blockchain-inspired, not full blockchain. Each supply chain event creates a 'block' containing: drug ID, location, timestamp, and cryptographic hash. Each block's hash incorporates the previous block's hash, creating a chain. If someone tampers with Block 2, its hash changes, breaking the link to Block 3. We can detect tampering instantly using the verify_chain() function which checks all hash links."
+> "We implemented an Immutable Cryptographic Ledger using Isolated Unit-Level Hash Chains. Instead of one massive global blockchain which causes massive database lock contention (an O(N) bottleneck), we maintain a separate hash chain for every individual drug unit. The genesis block (first scan) roots itself mathematically using a 64-zero constant. Each subsequent supply chain event is appended by hashing the previous block's hash along with the deterministic JSON serialization of the new event. This gives us infinite horizontal scalability and lightning-fast O(K) tamper verification at the edge."
 
 #### Q3: "Explain Random Forest classifier."
 
 **Answer:**
 
-> "Random Forest is an ensemble learning method using 100 decision trees. Each tree trains on a random subset of our 10 features (visual from YOLOv8 + behavioral from supply chain). When predicting, all 100 trees vote - majority wins. This prevents overfitting better than a single decision tree. Feature importance shows that travel speed (0.35) and license validity (0.22) are the strongest indicators of counterfeits."
+> "Random Forest is an ensemble learning method using 100 decision trees. Initially, our model suffered from overfitting due to tight coupling with visual features. We resolved this by implementing FeatureExtractorV2, which isolates the pipeline to 10 purely behavioral telemetry points (e.g., scan frequency, travel speed anomalies, geofence compliance). This modular architecture ensures the model classifies drugs reliably based entirely on supply chain telemetry, preventing visual discrepancies from corrupting the final verification verdict."
 
 #### Q4: "What is Haversine formula?"
 
@@ -39,6 +39,18 @@
 **Answer:**
 
 > "SHA-256 creates a 256-bit (64 character) unique fingerprint of data. Same input always gives same hash, but tiny change completely changes output. It's one-way - can't reverse hash to get original data. Collision-resistant - virtually impossible to find two inputs with same hash. We hash drug details to create tamper-evident ID. If someone changes expiry date, hash verification fails immediately."
+
+#### Q6: "How does the system handle concurrent ML inference without blocking the API?"
+
+**Answer:**
+
+> "We decoupled the heavy ML tensor operations from the FastAPI event loop using an asynchronous architecture. When an image is uploaded, FastAPI saves it locally with a UUID4 prefix to prevent race conditions and pushes the absolute file path to a Redis message broker. A background Celery worker picks up the task, loads the PyTorch models globally into RAM to prevent 'zombie worker' boot failures, executes the inference, and securely deletes the temporary file in a finally block to prevent disk space leaks. The client uses a polling mechanism synced via the UUID to retrieve the final result, ensuring the main web server remains highly responsive."
+
+#### Q7: "How is the API secured against unauthorized access?"
+
+**Answer:**
+
+> "We implemented a stateless JWT authentication system paired with a Live Database Check. Passwords are securely hashed using bcrypt. To eliminate the 'Stale Claims Vulnerability'—where a revoked user maintains access until their token expires—we deliberately exclude the user's role from the JWT payload. Instead, our FastAPI dependency decodes the user ID and performs a microsecond live database lookup to verify their active status and current role. This allows instant revocation. Additionally, we protected public endpoints like /verify-image using a Redis-backed sliding window rate limiter."
 
 ---
 
@@ -70,10 +82,10 @@
 
 **Minute 5: ML Pipeline (if ready)**
 
-- Upload medicine image
-- Show YOLOv8 bounding boxes
-- Display Random Forest prediction
-- Explain feature importance
+- Upload medicine image via API
+- Demonstrate asynchronous 202 Accepted response
+- Show Celery worker processing in background terminal
+- Display final Random Forest prediction via client polling
 
 ---
 

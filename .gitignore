@@ -17,3 +17,8 @@ node_modules/
 frontend/node_modules/
 dist/
 .env
+backend/dataset/raw/*.csv
+
+# Project Planning & Defense files
+Viva.txt
+Commits_to_be_made.txt
