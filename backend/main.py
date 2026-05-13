@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import FastAPI, HTTPException, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -15,21 +15,19 @@ import sqlite3
 import time
 startup_time = time.time()
 
-# Import database functions
-from database import (
-    save_drug_enhanced,
-    get_drug_by_unique_id,
-    get_supply_chain,
-    add_supply_chain_event,
-    log_failed_attempt,
-    get_failed_attempts_count,
-    get_recent_failed_attempts,
-    init_db,
-    seed_sample_data
+from database import get_db, SessionLocal
+from sqlalchemy.orm import Session
+from fastapi import Depends
+import crud
+import schemas
+import models
+from security import (
+    get_current_user, RequireRole, create_access_token,
+    verify_password, get_password_hash, rate_limit_verify
 )
 
-# 🆕 NEW IMPORTS - Blockchain & Anomaly Detection
-from blockchain import Blockchain
+# Blockchain engine — stateless cryptographic functions only
+from blockchain import verify_drug_chain
 from anomaly_detection import (
     haversine_distance,
     detect_cloning_attempt,
@@ -37,40 +35,12 @@ from anomaly_detection import (
     analyze_drug_safety
 )
 
-# 🆕 ML/DL IMPORTS
-# 🆕 ML/DL IMPORTS
-try:
-    import sys
-    from pathlib import Path
-    
-    # Add ml_models directory to Python path
-    ml_models_path = Path(__file__).parent / 'ml_models'
-    sys.path.insert(0, str(ml_models_path))
-    
-    from yolo_detector import PackagingDetector
-    from counterfeit_classifier import CounterfeitClassifier
-    
-    # Initialize ML models
-    print("🤖 Loading ML models...")
-    yolo_detector = PackagingDetector()
-    rf_classifier = CounterfeitClassifier()
-    print("✅ ML models loaded successfully!")
-    
-    ML_ENABLED = True
-except Exception as e:
-    print(f"⚠️  ML models not available: {e}")
-    print("   System will work without ML predictions")
-    ML_ENABLED = False
-    yolo_detector = None
-    rf_classifier = None
+# ML models are now loaded in worker.py (Celery worker process)
+# FastAPI no longer imports Ultralytics or Scikit-learn
+from worker import process_verification
 
 # Initialize FastAPI app
 app = FastAPI()
-
-# 🆕 NEW: Initialize Blockchain
-print("🔗 Initializing blockchain...")
-blockchain = Blockchain()
-print(f"✅ Blockchain ready with {len(blockchain.chain)} blocks")
 
 # ---------------------------------------------------------
 # 👇 YOUR WIFI IP ADDRESS
@@ -81,7 +51,11 @@ MY_IP = "10.22.214.149"
 # CORS Setup - Allow Mobile Access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://10.22.214.149:5173" # Adding your specific IP just in case
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -94,17 +68,7 @@ app.mount("/qrcodes", StaticFiles(directory="qrcodes"), name="qrcodes")
 # DATA MODELS
 # ════════════════════════════════════════════
 
-class DrugBatchRequest(BaseModel):
-    drugName: str
-    genericName: Optional[str] = None
-    manufacturer: str
-    licenseNumber: Optional[str] = None
-    quantity: int
-    dosage: Optional[str] = None
-    composition: Optional[str] = None
-    mrp: Optional[float] = None
-    mfgDate: str
-    expDate: str
+# Models moved to schemas.py
 
 # ════════════════════════════════════════════
 # STARTUP - Initialize DB with Seed Data
@@ -112,20 +76,17 @@ class DrugBatchRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
-    init_db()
-    
-    conn = sqlite3.connect('meditrace.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM drugs')
-    count = cursor.fetchone()[0]
-    conn.close()
-    
-    if count == 0:
-        print("🌱 Seeding sample pharmaceutical batches...")
-        seed_sample_data()
-        print("✅ Sample data loaded - Dashboard ready!")
-    else:
-        print(f"✅ Database initialized with {count} existing units")
+    db = SessionLocal()
+    try:
+        count = crud.seed_sample_data(db)
+        if count > 0:
+            print(f"✅ Database initialized with {count} existing units")
+        else:
+            print("✅ Sample data loaded - Dashboard ready!")
+    except Exception as e:
+        print(f"⚠️ Startup error: {e}")
+    finally:
+        db.close()
 
 # ════════════════════════════════════════════
 # ROOT ENDPOINT
@@ -147,37 +108,49 @@ def read_root():
     }
 
 # ════════════════════════════════════════════
+# AUTHENTICATION ENDPOINTS
+# ════════════════════════════════════════════
+
+@app.post("/auth/register", response_model=schemas.UserResponse)
+def register_user(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
+    """Register a new user with bcrypt-hashed password."""
+    existing = db.query(models.User).filter(models.User.username == user_data.username).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    new_user = models.User(
+        username=user_data.username,
+        hashed_password=get_password_hash(user_data.password),
+        role=user_data.role or "user",
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+@app.post("/auth/login", response_model=schemas.Token)
+def login(credentials: schemas.LoginRequest, db: Session = Depends(get_db)):
+    """Authenticate user and return a signed JWT."""
+    user = db.query(models.User).filter(models.User.username == credentials.username).first()
+    if not user or not verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not user.is_active:
+        raise HTTPException(status_code=401, detail="Account deactivated")
+    
+    token = create_access_token(user_id=user.id)
+    return {"access_token": token, "token_type": "bearer"}
+
+# ════════════════════════════════════════════
 # STATS ENDPOINT (With Failed Attempts Count)
 # ════════════════════════════════════════════
 
 @app.get("/stats")
-def get_stats():
-    conn = sqlite3.connect('meditrace.db')
-    cursor = conn.cursor()
-    
-    # Total unique batches
-    cursor.execute('SELECT COUNT(DISTINCT batch_id) FROM drugs')
-    total_batches = cursor.fetchone()[0]
-    
-    # Total units
-    cursor.execute('SELECT COUNT(*) FROM drugs')
-    total_units = cursor.fetchone()[0]
-    
-    # Recent activity (last 7 days)
-    cursor.execute('''
-        SELECT COUNT(*) FROM drugs 
-        WHERE created_at >= datetime('now', '-7 days')
-    ''')
-    recent_units = cursor.fetchone()[0]
-    
-    conn.close()
-    
-    # Get failed attempts count (FLAGGED ITEMS)
-    failed_count = get_failed_attempts_count()
-    
-    # Calculate metrics
-    efficiency = 99.3 if total_units > 0 else 0
-    growth = round((recent_units / total_units * 100), 1) if total_units > 0 else 0
+def get_stats(db: Session = Depends(get_db)):
+    total_batches, total_units, failed_count, efficiency, growth = crud.get_stats(db)
     
     return {
         "totalBatches": total_batches,
@@ -186,15 +159,20 @@ def get_stats():
         "efficiency": efficiency,
         "growth": growth,
         "verificationRate": 99.3,
-        "blockchainLength": len(blockchain.chain)  # 🆕 NEW
+        "blockchainLength": db.query(models.SupplyChainEvent).count()
     }
 
 # ════════════════════════════════════════════
 # GENERATE BATCH (POST with Enhanced Fields)
+# Restricted to: manufacturer, admin
 # ════════════════════════════════════════════
 
 @app.post("/generate-batch")
-async def generate_batch(request: DrugBatchRequest):
+async def generate_batch(
+    request: schemas.DrugBatchCreate,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(RequireRole(["manufacturer", "admin"])),
+):
     if request.quantity > 50:
         raise HTTPException(status_code=400, detail="Maximum 50 units per batch")
     
@@ -209,27 +187,29 @@ async def generate_batch(request: DrugBatchRequest):
         
         # Generate SHA-256 hash
         hash_value = hashlib.sha256(
-            f"MediTrace:{request.drugName}:{unique_id}:{request.mfgDate}".encode()
+            f"MediTrace:{request.drug_name}:{unique_id}:{request.mfg_date}".encode()
         ).hexdigest()
         
         # Save to database with all details
-        drug_id = save_drug_enhanced(
-            drug_name=request.drugName,
-            generic_name=request.genericName,
+        drug_id = crud.save_drug_enhanced(
+            db=db,
+            drug_name=request.drug_name,
+            generic_name=request.generic_name,
             batch_id=batch_id,
             unique_id=unique_id,
             hash_value=hash_value,
             manufacturer=request.manufacturer,
-            license_number=request.licenseNumber,
+            license_number=request.license_number,
             dosage=request.dosage,
             composition=request.composition,
             mrp=request.mrp,
-            mfg_date=request.mfgDate,
-            exp_date=request.expDate
+            mfg_date=request.mfg_date,
+            exp_date=request.exp_date
         )
         
         # Add supply chain event 1
-        add_supply_chain_event(
+        crud.add_supply_chain_event(
+            db=db,
             drug_id=drug_id,
             location="Bangalore Factory",
             lat=12.9716,
@@ -245,7 +225,8 @@ async def generate_batch(request: DrugBatchRequest):
         )
         
         # Add supply chain event 2
-        add_supply_chain_event(
+        crud.add_supply_chain_event(
+            db=db,
             drug_id=drug_id,
             location="Chennai Warehouse",
             lat=13.0827,
@@ -261,7 +242,8 @@ async def generate_batch(request: DrugBatchRequest):
         )
 
         # Add supply chain event 3
-        add_supply_chain_event(
+        crud.add_supply_chain_event(
+            db=db,
             drug_id=drug_id,
             location="Mumbai Retail",
             lat=19.0760,
@@ -300,7 +282,7 @@ async def generate_batch(request: DrugBatchRequest):
     return {
         "status": "Success",
         "batch_id": batch_id,
-        "drug_name": request.drugName,
+        "drug_name": request.drug_name,
         "quantity": request.quantity,
         "qr_codes": generated_files,
         "blockchain_blocks_added": request.quantity * 3  # 🆕 NEW
@@ -310,8 +292,8 @@ async def generate_batch(request: DrugBatchRequest):
 # VERIFY BY ID (With Anomaly Detection)
 # ════════════════════════════════════════════
 
-@app.get("/verify/{unique_id}")
-def verify_drug(unique_id: str):
+@app.get("/verify/{unique_id}", response_model=schemas.VerificationResponse)
+def verify_drug(unique_id: str, db: Session = Depends(get_db)):
     """
     Verify drug authenticity with ML-powered counterfeit detection
     
@@ -322,11 +304,12 @@ def verify_drug(unique_id: str):
     """
     
     # Get drug from database
-    drug = get_drug_by_unique_id(unique_id)
+    drug = crud.get_drug_by_unique_id(db, unique_id)
     
     if not drug:
         # LOG FAILED ATTEMPT
-        log_failed_attempt(
+        crud.log_failed_attempt(
+            db=db,
             scanned_id=unique_id,
             attempt_type="INVALID_ID",
             reason="Drug not found in database - Possible counterfeit"
@@ -338,45 +321,11 @@ def verify_drug(unique_id: str):
         }
     
     # Get supply chain
-    supply_chain = get_supply_chain(drug['id'])
+    supply_chain = crud.get_supply_chain(db, drug.id)
     
-    # 🆕 ML PREDICTION - Random Forest Behavioral Analysis
+    # ML predictions are now handled asynchronously via /verify-image + Celery worker.
+    # Text-only verification relies on anomaly detection and database validation.
     ml_prediction = None
-    if ML_ENABLED and rf_classifier:
-        try:
-            # No image provided for text-only verification
-            ml_prediction = rf_classifier.predict(
-                drug_id=drug['id'],
-                supply_chain=supply_chain,
-                yolo_features=None  # Text-only, no image
-            )
-            
-            # If Random Forest detects counterfeit with high confidence
-            if ml_prediction['is_counterfeit'] and ml_prediction['confidence'] > 0.75:
-                log_failed_attempt(
-                    scanned_id=unique_id,
-                    attempt_type="ML_COUNTERFEIT_DETECTED",
-                    reason=f"Random Forest prediction: {ml_prediction['explanation']}"
-                )
-                
-                return {
-                    "status": "suspicious",
-                    "message": "⚠️ ML COUNTERFEIT DETECTION",
-                    "name": drug['drug_name'],
-                    "batchId": drug['batch_id'],
-                    "ml_analysis": {
-                        "verdict": ml_prediction['verdict'],
-                        "confidence": f"{ml_prediction['confidence']:.1%}",
-                        "risk_level": ml_prediction['risk_level'],
-                        "explanation": ml_prediction['explanation'],
-                        "probability_counterfeit": f"{ml_prediction['probability_counterfeit']:.1%}"
-                    },
-                    "recommendation": "SUSPICIOUS - Verify with image scan or report to authorities"
-                }
-        
-        except Exception as e:
-            print(f"⚠️  ML prediction failed: {e}")
-            ml_prediction = None
     
     # 🔍 ANOMALY DETECTION (Existing geospatial analysis)
     anomaly_report = None
@@ -384,7 +333,8 @@ def verify_drug(unique_id: str):
         anomaly_report = analyze_drug_safety(unique_id)
         
         if anomaly_report and anomaly_report.get('risk_level') == 'CRITICAL':
-            log_failed_attempt(
+            crud.log_failed_attempt(
+                db=db,
                 scanned_id=unique_id,
                 attempt_type="ANOMALY_DETECTED",
                 reason=f"Impossible travel speed detected"
@@ -393,8 +343,8 @@ def verify_drug(unique_id: str):
             return {
                 "status": "suspicious",
                 "message": "⚠️ CRITICAL ANOMALY DETECTED",
-                "name": drug['drug_name'],
-                "batchId": drug['batch_id'],
+                "name": drug.drug_name,
+                "batchId": drug.batch_id,
                 "anomaly": anomaly_report,
                 "recommendation": "DO NOT CONSUME - Report to authorities immediately"
             }
@@ -402,32 +352,32 @@ def verify_drug(unique_id: str):
     # Format supply chain for frontend
     locations = []
     for event in supply_chain:
-        timestamp = event['timestamp']
+        timestamp = str(event.timestamp)
         date_part = timestamp.split(' ')[0] if ' ' in timestamp else timestamp
         time_part = timestamp.split(' ')[1] if ' ' in timestamp else '00:00:00'
         
         locations.append({
-            'place': event['place'],
+            'place': event.location,
             'date': date_part,
             'time': time_part,
-            'lat': event['latitude'],
-            'lon': event['longitude'],
+            'lat': event.latitude,
+            'lon': event.longitude,
             'status': 'verified'
         })
     
     # ✅ AUTHENTIC RESPONSE (with ML insights)
     response = {
         "status": "authentic",
-        "name": drug['drug_name'],
-        "genericName": drug['generic_name'],
-        "batchId": drug['batch_id'],
-        "manufacturer": drug['manufacturer'],
-        "licenseNumber": drug['license_number'],
-        "dosage": drug['dosage'],
-        "mrp": drug['mrp'],
-        "hash": drug['hash'],
-        "mfgDate": drug['mfg_date'],
-        "expDate": drug['exp_date'],
+        "name": drug.drug_name,
+        "genericName": drug.generic_name,
+        "batchId": drug.batch_id,
+        "manufacturer": drug.manufacturer,
+        "licenseNumber": drug.license_number,
+        "dosage": drug.dosage,
+        "mrp": drug.mrp,
+        "hash": drug.hash,
+        "mfgDate": str(drug.mfg_date),
+        "expDate": str(drug.exp_date),
         "locations": locations,
         "anomalyReport": anomaly_report
     }
@@ -445,229 +395,99 @@ def verify_drug(unique_id: str):
     return response
 
 # ════════════════════════════════════════════
-# VERIFY BY IMAGE UPLOAD (With Failed Logging)
+# VERIFY BY IMAGE (Async — Celery Dispatch)
 # ════════════════════════════════════════════
 
-@app.post("/verify-image")
-async def verify_from_image(file: UploadFile = File(...)):
+TEMP_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "temp_uploads")
+os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
+
+@app.post("/verify-image", status_code=202)
+async def verify_from_image(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _rate_check=Depends(rate_limit_verify),
+):
     """
-    Verify drug from QR image with YOLO + Random Forest analysis
-    
-    New features:
-    - YOLOv8 packaging detection
-    - Random Forest prediction with visual features
-    - Combined visual + behavioral analysis
+    Accepts image, decodes QR synchronously (lightweight),
+    saves file with UUID4 prefix, dispatches ML to Celery worker.
+    Returns 202 Accepted with task_id for polling.
     """
-    
     try:
-        # Read uploaded image
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        # 🆕 YOLO DETECTION - Check for medicine packaging
-        yolo_result = None
-        if ML_ENABLED and yolo_detector:
-            try:
-                yolo_result = yolo_detector.detect(image_array=img)
-                print(f"📦 YOLO: Packaging {'detected' if yolo_result['packaging_present'] else 'NOT detected'} "
-                      f"(confidence: {yolo_result['packaging_confidence']:.2%})")
-            except Exception as e:
-                print(f"⚠️  YOLO detection failed: {e}")
-                yolo_result = None
-        
-        # Decode QR code using pyzbar
+
+        if img is None:
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid image")
+
+        # QR decode is lightweight — stays in FastAPI
         decoded_objects = decode(img)
-        
         if not decoded_objects:
-            # No QR detected - but check if packaging visible
-            if yolo_result and yolo_result['packaging_present']:
-                return {
-                    "status": "error",
-                    "message": "Medicine packaging detected but QR code not readable. Try better lighting/angle."
-                }
             return {"status": "error", "message": "No QR code detected in image"}
-            
-        # Extract unique_id from QR data
-        qr_content = decoded_objects[0].data.decode('utf-8')
-        print(f"📷 Scanned QR Content: {qr_content}")
-        
-        # Extract unique_id from URL
-        if "id=" in qr_content:
-            unique_id = qr_content.split("id=")[1]
-        else:
-            unique_id = qr_content
-        
-        # Verify drug exists in database
-        drug = get_drug_by_unique_id(unique_id)
-        
+
+        qr_content = decoded_objects[0].data.decode("utf-8")
+        unique_id = qr_content.split("id=")[1] if "id=" in qr_content else qr_content
+
+        # Verify drug exists before wasting a worker slot
+        drug = crud.get_drug_by_unique_id(db, unique_id)
         if not drug:
-            # LOG FAILED ATTEMPT
-            log_failed_attempt(
-                scanned_id=unique_id,
+            crud.log_failed_attempt(
+                db=db, scanned_id=unique_id,
                 attempt_type="FAKE_QR_IMAGE",
                 reason=f"Image upload - QR decoded to '{unique_id}' but not in database"
             )
-            
             return {"status": "fake", "message": f"Invalid QR Code: {unique_id}"}
-        
-        # Get supply chain
-        supply_chain = get_supply_chain(drug['id'])
-        
-        # 🆕 ML PREDICTION - Random Forest with YOLO features
-        ml_prediction = None
-        if ML_ENABLED and rf_classifier:
-            try:
-                # Prepare YOLO features for Random Forest
-                yolo_features = None
-                if yolo_result:
-                    yolo_features = {
-                        'packaging_present': 1 if yolo_result['packaging_present'] else 0,
-                        'packaging_confidence': yolo_result['packaging_confidence']
-                    }
-                
-                # Run Random Forest prediction
-                ml_prediction = rf_classifier.predict(
-                    drug_id=drug['id'],
-                    supply_chain=supply_chain,
-                    yolo_features=yolo_features
-                )
-                
-                print(f"🌳 Random Forest: {ml_prediction['verdict']} "
-                      f"(confidence: {ml_prediction['confidence']:.2%})")
-                
-                # If counterfeit detected with high confidence
-                if ml_prediction['is_counterfeit'] and ml_prediction['confidence'] > 0.75:
-                    log_failed_attempt(
-                        scanned_id=unique_id,
-                        attempt_type="ML_COUNTERFEIT_DETECTED",
-                        reason=f"Visual + Behavioral analysis: {ml_prediction['explanation']}"
-                    )
-                    
-                    return {
-                        "status": "suspicious",
-                        "message": "⚠️ COUNTERFEIT DETECTED (ML Analysis)",
-                        "unique_id": unique_id,
-                        "name": drug['drug_name'],
-                        "batchId": drug['batch_id'],
-                        "ml_analysis": {
-                            "verdict": ml_prediction['verdict'],
-                            "confidence": f"{ml_prediction['confidence']:.1%}",
-                            "risk_level": ml_prediction['risk_level'],
-                            "explanation": ml_prediction['explanation'],
-                            "visual_check": {
-                                "packaging_detected": yolo_result['packaging_present'] if yolo_result else None,
-                                "confidence": f"{yolo_result['packaging_confidence']:.1%}" if yolo_result else None
-                            }
-                        },
-                        "recommendation": "DO NOT CONSUME - Multiple red flags detected"
-                    }
-            
-            except Exception as e:
-                print(f"⚠️  ML prediction failed: {e}")
-                ml_prediction = None
-        
-        # Format supply chain locations
-        locations = []
-        for event in supply_chain:
-            timestamp = event['timestamp']
-            date_part = timestamp.split(' ')[0] if ' ' in timestamp else timestamp
-            time_part = timestamp.split(' ')[1] if ' ' in timestamp else '00:00:00'
-            
-            locations.append({
-                'place': event['place'],
-                'date': date_part,
-                'time': time_part,
-                'lat': event['latitude'],
-                'lon': event['longitude'],
-                'status': 'verified'
-            })
 
-        # ✅ AUTHENTIC RESPONSE (with ML insights)
-        response = {
-            "status": "authentic",
-            "unique_id": unique_id,
-            "name": drug['drug_name'],
-            "genericName": drug['generic_name'],
-            "batchId": drug['batch_id'],
-            "manufacturer": drug['manufacturer'],
-            "dosage": drug['dosage'],
-            "hash": drug['hash'],
-            "mfgDate": drug['mfg_date'],
-            "expDate": drug['exp_date'],
-            "locations": locations
+        # UUID4-prefixed filename prevents race condition
+        task_id = str(uuid.uuid4())
+        safe_filename = f"{task_id}_{file.filename}"
+        file_path = os.path.join(TEMP_UPLOAD_DIR, safe_filename)
+
+        with open(file_path, "wb") as f:
+            f.write(contents)
+
+        # Dispatch to Celery worker with explicit task_id
+        process_verification.apply_async(args=[file_path, unique_id, task_id], task_id=task_id)
+
+        return {
+            "status": "processing",
+            "task_id": task_id,
+            "message": "Image received. ML analysis dispatched to background worker."
         }
-        
-        # Add YOLO results
-        if yolo_result:
-            response["visual_verification"] = {
-                "packaging_detected": yolo_result['packaging_present'],
-                "confidence": f"{yolo_result['packaging_confidence']:.2%}",
-                "num_packages": yolo_result['num_packages']
-            }
-        
-        # Add ML prediction
-        if ml_prediction:
-            response["ml_analysis"] = {
-                "verdict": ml_prediction['verdict'],
-                "confidence": f"{ml_prediction['confidence']:.1%}",
-                "risk_level": ml_prediction['risk_level'],
-                "probability_authentic": f"{ml_prediction['probability_authentic']:.1%}",
-                "probability_counterfeit": f"{ml_prediction['probability_counterfeit']:.1%}"
-            }
-        
-        return response
 
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"❌ Error processing image: {e}")
+        print(f"❌ Error dispatching image verification: {e}")
         import traceback
-        traceback.print_exc()
-        return {"status": "error", "message": "Could not process image"}
+        return {"status": "error", "message": f"Could not process image upload: {str(e)}", "traceback": traceback.format_exc()}
+
+# ════════════════════════════════════════════
+# VERIFICATION STATUS (Polling Endpoint)
+# ════════════════════════════════════════════
+
+@app.get("/verification/status/{task_id}")
+def get_verification_status(task_id: str):
+    """Poll for the result of an async ML verification task."""
+    from celery.result import AsyncResult
+    result = AsyncResult(task_id, app=process_verification.app)
+
+    if result.state == "PENDING":
+        return {"task_id": task_id, "status": "processing", "message": "Task is queued or in progress."}
+    elif result.state == "FAILURE":
+        return {"task_id": task_id, "status": "error", "message": "Task failed during execution."}
+    elif result.state == "SUCCESS":
+        return result.result
+    else:
+        return {"task_id": task_id, "status": result.state}
 
 # ════════════════════════════════════════════
 # LEDGER (Blockchain View)
 # ════════════════════════════════════════════
 
 @app.get("/ledger")
-def get_ledger():
-    conn = sqlite3.connect('meditrace.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT 
-            sc.id,
-            d.drug_name,
-            d.batch_id,
-            sc.event_type,
-            sc.location,
-            sc.timestamp
-        FROM supply_chain sc
-        JOIN drugs d ON sc.drug_id = d.id
-        ORDER BY sc.timestamp DESC
-        LIMIT 50
-    ''')
-    
-    results = cursor.fetchall()
-    conn.close()
-    
-    blocks = []
-    for i, row in enumerate(results):
-        # Generate hashes for blockchain feel
-        current_hash = hashlib.sha256(f"{row[0]}{row[5]}".encode()).hexdigest()[:32]
-        prev_hash = hashlib.sha256(f"{row[0]-1}{row[5]}".encode()).hexdigest()[:32] if i > 0 else "0x000000"
-        
-        blocks.append({
-            "blockNumber": f"#{row[0]:05d}",
-            "hash": f"0x{current_hash}",
-            "previousHash": f"0x{prev_hash}",
-            "timestamp": row[5],
-            "drug": row[1],
-            "batchId": row[2],
-            "event": row[3],
-            "location": row[4],
-            "verified": True
-        })
-    
+def get_ledger(db: Session = Depends(get_db)):
+    blocks = crud.get_ledger(db)
     return {"blocks": blocks}
 
 # ════════════════════════════════════════════
@@ -675,9 +495,9 @@ def get_ledger():
 # ════════════════════════════════════════════
 
 @app.get("/failed-attempts")
-def get_failed_attempts():
+def get_failed_attempts(db: Session = Depends(get_db)):
     """Get recent failed verification attempts for monitoring"""
-    attempts = get_recent_failed_attempts(limit=20)
+    attempts = crud.get_recent_failed_attempts(db, limit=20)
     
     return {
         "total": len(attempts),
@@ -685,45 +505,54 @@ def get_failed_attempts():
     }
 
 # ════════════════════════════════════════════
-# 🆕 NEW: BLOCKCHAIN STATUS ENDPOINT
+# VERIFY CHAIN (Immutable Ledger Integrity Check)
 # ════════════════════════════════════════════
 
-@app.get("/blockchain/status")
-def get_blockchain_status():
+@app.get("/verify-chain/{unique_id}")
+def verify_chain(unique_id: str, db: Session = Depends(get_db)):
     """
-    Get current blockchain integrity status
-    
-    🎓 LEARNING POINTS:
-    - How to access blockchain data
-    - How to verify chain integrity
-    - How to format response for frontend
+    Traverses the isolated unit-level hash chain for a specific drug.
+    Recalculates every SHA-256 hash from the genesis root.
+    Returns a hard boolean: is_tampered.
     """
-    
-    # Get latest block from chain
-    latest_block = blockchain.get_latest_block()
-    
-    # Verify entire chain integrity
-    is_valid = blockchain.verify_chain()
-    
-    # Get genesis (first) block
-    genesis_block = blockchain.chain[0]
-    
+    drug = crud.get_drug_by_unique_id(db, unique_id)
+    if not drug:
+        raise HTTPException(status_code=404, detail="Drug not found")
+
+    # Fetch events in strict insertion order (by PK, not timestamp)
+    from sqlalchemy import asc
+    events = db.query(models.SupplyChainEvent)\
+               .filter(models.SupplyChainEvent.drug_id == drug.id)\
+               .order_by(asc(models.SupplyChainEvent.id))\
+               .all()
+
+    if not events:
+        return {
+            "unique_id": unique_id,
+            "is_tampered": False,
+            "message": "No supply chain events recorded yet.",
+            "blocks_verified": 0
+        }
+
+    chain_intact = verify_drug_chain(events)
+
+    if not chain_intact:
+        return {
+            "unique_id": unique_id,
+            "is_tampered": True,
+            "status": "CRITICAL",
+            "message": "BLOCKCHAIN INTEGRITY FAILURE: Cryptographic chain is broken. This drug's supply chain data has been tampered with.",
+            "blocks_verified": len(events)
+        }
+
     return {
-        "status": "verified" if is_valid else "corrupted",
-        "integrity": "intact" if is_valid else "broken",
-        "chainLength": len(blockchain.chain),
-        "latestBlock": {
-            "index": latest_block.index,
-            "hash": latest_block.hash,
-            "previousHash": latest_block.previous_hash,
-            "timestamp": str(latest_block.timestamp),
-            "data": latest_block.data
-        },
-        "genesisBlock": {
-            "hash": genesis_block.hash,
-            "timestamp": str(genesis_block.timestamp)
-        },
-        "lastVerified": datetime.now().isoformat()
+        "unique_id": unique_id,
+        "is_tampered": False,
+        "status": "VERIFIED",
+        "message": "Chain of custody is cryptographically intact.",
+        "blocks_verified": len(events),
+        "genesis_hash": events[0].block_hash,
+        "tail_hash": events[-1].block_hash
     }
 
 # ════════════════════════════════════════════
@@ -731,23 +560,19 @@ def get_blockchain_status():
 # ════════════════════════════════════════════
 
 @app.get("/anomaly/analyze/{unique_id}")
-def analyze_anomalies(unique_id: str):
+def analyze_anomalies(unique_id: str, db: Session = Depends(get_db)):
     """
     Detailed anomaly analysis for a specific drug
-    
-    🎓 LEARNING POINTS:
-    - How Haversine distance is calculated
-    - How speed thresholds work
-    - How to detect cloning attempts
     """
     
     # Get drug
-    drug = get_drug_by_unique_id(unique_id)
+    drug = crud.get_drug_by_unique_id(db, unique_id)
     if not drug:
         raise HTTPException(status_code=404, detail="Drug not found")
     
     # Get supply chain
-    supply_chain = get_supply_chain(drug['id'])
+    # Get supply chain
+    supply_chain = crud.get_supply_chain(db, drug.id)
     
     if len(supply_chain) < 2:
         return {
@@ -766,22 +591,21 @@ def analyze_anomalies(unique_id: str):
         
         # Calculate distance
         distance = haversine_distance(
-            event1['latitude'], event1['longitude'],
-            event2['latitude'], event2['longitude']
+            event1.latitude, event1.longitude,
+            event2.latitude, event2.longitude
         )
         
         # Calculate time difference
-        from datetime import datetime
-        time1 = datetime.fromisoformat(event1['timestamp'].replace(' ', 'T'))
-        time2 = datetime.fromisoformat(event2['timestamp'].replace(' ', 'T'))
+        time1 = event1.timestamp
+        time2 = event2.timestamp
         time_diff_hours = (time2 - time1).total_seconds() / 3600
         
         # Calculate speed
         speed = distance / time_diff_hours if time_diff_hours > 0 else 0
         
         detailed_events.append({
-            "from": event1['place'],
-            "to": event2['place'],
+            "from": event1.location,
+            "to": event2.location,
             "distance_km": round(distance, 2),
             "time_hours": round(time_diff_hours, 2),
             "speed_kmh": round(speed, 2),
@@ -790,7 +614,7 @@ def analyze_anomalies(unique_id: str):
     
     return {
         "drug_id": unique_id,
-        "drug_name": drug['drug_name'],
+        "drug_name": drug.drug_name,
         "overall_report": report,
         "detailed_analysis": detailed_events,
         "total_events": len(supply_chain),
@@ -816,33 +640,15 @@ def health_check():
 # ════════════════════════════════════════════
 
 @app.get("/monitor/dashboard")
-def get_monitor_dashboard():
-    """
-    Complete dashboard data for System Monitor page
-    
-    Returns:
-    - System health metrics
-    - Blockchain status  
-    - Recent anomalies from failed attempts
-    """
+def get_monitor_dashboard(db: Session = Depends(get_db)):
+    """Complete dashboard data for System Monitor page"""
     
     import time
     
-    # 1. SYSTEM HEALTH
-    conn = sqlite3.connect('meditrace.db')
-    cursor = conn.cursor()
+    # 1. SYSTEM HEALTH (using ORM)
+    total_batches, total_units, failed_count, efficiency, growth = crud.get_stats(db)
+    total_scans = total_units + failed_count
     
-    # Total scans = drugs created + failed attempts
-    cursor.execute('SELECT COUNT(*) FROM drugs')
-    total_drugs = cursor.fetchone()[0]
-    
-    cursor.execute('SELECT COUNT(*) FROM failed_attempts')
-    total_failed = cursor.fetchone()[0]
-    
-    total_scans = total_drugs + total_failed
-    
-    # Calculate uptime (from when backend started)
-    # Note: This resets on restart - for production use persistent storage
     uptime_seconds = time.time() - startup_time
     uptime_hours = int(uptime_seconds / 3600)
     uptime_mins = int((uptime_seconds % 3600) / 60)
@@ -867,43 +673,26 @@ def get_monitor_dashboard():
         "lastVerified": datetime.now().isoformat()
     }
     
-    # 3. ANOMALIES (from failed attempts + real anomaly detection)
-    cursor.execute('''
-        SELECT scanned_id, attempt_type, reason, timestamp
-        FROM failed_attempts
-        ORDER BY timestamp DESC
-        LIMIT 10
-    ''')
-    
+    # 3. ANOMALIES (using crud)
+    recent_attempts = crud.get_recent_failed_attempts(db, limit=10)
     anomalies = []
-    for row in cursor.fetchall():
-        scanned_id, attempt_type, reason, timestamp = row
-        
-        # Determine severity
-        severity = "critical" if "ANOMALY" in attempt_type else "medium"
-        
-        # Parse anomaly details from reason if available
+    for attempt in recent_attempts:
+        severity = "critical" if "ANOMALY" in attempt['attempt_type'] else "medium"
         anomaly_data = {
-            "id": scanned_id,
-            "type": attempt_type,
+            "id": attempt['scanned_id'],
+            "type": attempt['attempt_type'],
             "severity": severity,
-            "drugId": scanned_id,
-            "reason": reason,
-            "timestamp": timestamp,
+            "drugId": attempt['scanned_id'],
+            "reason": attempt.get('reason', ''),
+            "timestamp": attempt['timestamp'],
             "status": "flagged"
         }
-        
-        # If it's a speed anomaly, try to extract details
-        if "speed" in reason.lower() or "travel" in reason.lower():
+        reason = attempt.get('reason', '')
+        if reason and ("speed" in reason.lower() or "travel" in reason.lower()):
             anomaly_data["type"] = "IMPOSSIBLE_SPEED"
-            # Could parse distance, speed etc from reason string
-            # For now, keep simple
-        elif "frequency" in reason.lower() or "scan" in reason.lower():
+        elif reason and ("frequency" in reason.lower() or "scan" in reason.lower()):
             anomaly_data["type"] = "SUSPICIOUS_FREQUENCY"
-        
         anomalies.append(anomaly_data)
-    
-    conn.close()
     
     return {
         "health": health,
@@ -914,33 +703,19 @@ def get_monitor_dashboard():
 
 @app.get("/ml/status")
 def get_ml_status():
-    """Get status of ML models (YOLOv8 + Random Forest)"""
-    
-    yolo_status = "loaded" if (ML_ENABLED and yolo_detector) else "not available"
-    rf_status = "loaded" if (ML_ENABLED and rf_classifier) else "not available"
-    
-    response = {
-        "ml_enabled": ML_ENABLED,
+    """Get status of ML models — now served by Celery worker process."""
+    return {
+        "ml_enabled": True,
+        "architecture": "async_celery",
         "models": {
             "yolov8": {
-                "status": yolo_status,
+                "status": "loaded_in_worker",
                 "purpose": "Visual packaging verification"
             },
             "random_forest": {
-                "status": rf_status,
+                "status": "loaded_in_worker",
                 "purpose": "Behavioral counterfeit detection"
             }
-        }
+        },
+        "note": "ML models are loaded in the Celery worker process, not in FastAPI."
     }
-    
-    if ML_ENABLED and rf_classifier:
-        try:
-            importances = rf_classifier.get_feature_importance()
-            top_3 = sorted(importances.items(), key=lambda x: x[1], reverse=True)[:3]
-            response["models"]["random_forest"]["top_features"] = {
-                name: f"{importance:.3f}" for name, importance in top_3
-            }
-        except:
-            pass
-    
-    return response
