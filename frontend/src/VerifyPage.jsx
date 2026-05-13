@@ -37,9 +37,7 @@ export default function VerifyPage() {
 
     try {
       // Use your laptop's IP address
-      const response = await fetch(
-        `http://10.22.214.149:8000/verify/${uniqueId}`
-      );
+      const response = await fetch(`http://127.0.0.1:8000/verify/${uniqueId}`);
       const data = await response.json();
 
       console.log("✅ Backend response:", data);
@@ -77,7 +75,7 @@ export default function VerifyPage() {
       console.log("📤 Uploading image to AI endpoint...");
 
       // Call backend AI endpoint using your laptop's IP
-      const response = await fetch("http://10.22.214.149:8000/verify-image", {
+      const response = await fetch("http://127.0.0.1:8000/verify-image", {
         method: "POST",
         body: formData,
       });
@@ -96,13 +94,13 @@ export default function VerifyPage() {
         alert(
           "⚠️ " +
             (data.message ||
-              "QR code not detected in image. Please try another image.")
+              "QR code not detected in image. Please try another image."),
         );
       }
     } catch (error) {
       console.error("❌ AI verification failed:", error);
       alert(
-        "Failed to process image. Ensure backend is running with OpenCV installed!"
+        "Failed to process image. Ensure backend is running with OpenCV installed!",
       );
     } finally {
       setIsScanning(false);
@@ -128,7 +126,7 @@ export default function VerifyPage() {
     setScanResult(null);
 
     try {
-      const response = await fetch(`http://10.22.214.149:8000/verify/${id}`);
+      const response = await fetch(`http://127.0.0.1:8000/verify/${id}`);
       const data = await response.json();
 
       console.log("✅ Backend response:", data);
