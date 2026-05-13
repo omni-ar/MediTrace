@@ -80,8 +80,26 @@ export default function VerifyPage() {
         body: formData,
       });
 
-      const data = await response.json();
-      console.log("✅ AI Verification result:", data);
+      let data = await response.json();
+      console.log("📤 Initial AI Dispatch:", data);
+
+      if (data.status === "processing" && data.task_id) {
+        // Poll for the result
+        let isComplete = false;
+        while (!isComplete) {
+          console.log("🔄 Polling status for task:", data.task_id);
+          await new Promise((resolve) => setTimeout(resolve, 2000)); // wait 2 seconds
+          
+          const pollResponse = await fetch(`http://127.0.0.1:8000/verification/status/${data.task_id}`);
+          data = await pollResponse.json();
+          
+          if (data.status !== "processing" && data.status !== "PENDING") {
+            isComplete = true;
+          }
+        }
+      }
+      
+      console.log("✅ Final AI Verification result:", data);
 
       if (data.status === "authentic") {
         setScanResult(data);
@@ -100,7 +118,7 @@ export default function VerifyPage() {
     } catch (error) {
       console.error("❌ AI verification failed:", error);
       alert(
-        "Failed to process image. Ensure backend is running with OpenCV installed!",
+        "Failed to process image. Ensure backend and Celery worker are running!",
       );
     } finally {
       setIsScanning(false);

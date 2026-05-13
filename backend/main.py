@@ -217,12 +217,7 @@ async def generate_batch(
             event_type="Production Complete"
         )
         
-        # 🆕 NEW: Add to blockchain
-        blockchain.add_block(
-            drug_id=drug_id,
-            event_type="Production Complete",
-            location="Bangalore Factory"
-        )
+
         
         # Add supply chain event 2
         crud.add_supply_chain_event(
@@ -234,12 +229,7 @@ async def generate_batch(
             event_type="Quality Check"
         )
         
-        # 🆕 NEW: Add to blockchain
-        blockchain.add_block(
-            drug_id=drug_id,
-            event_type="Quality Check",
-            location="Chennai Warehouse"
-        )
+
 
         # Add supply chain event 3
         crud.add_supply_chain_event(
@@ -251,12 +241,7 @@ async def generate_batch(
             event_type="Warehouse Receipt"
         )
         
-        # 🆕 NEW: Add to blockchain
-        blockchain.add_block(
-            drug_id=drug_id,
-            event_type="Warehouse Receipt",
-            location="Mumbai Retail"
-        )
+
         
         # Generate QR code
         qr = qrcode.QRCode(
